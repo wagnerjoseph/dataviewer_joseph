@@ -18,7 +18,7 @@ Interactive geospatial timeseries data viewer for Earth observation data with in
 Install the package directly from GitHub (no need to clone the repository):
 
 ```bash
-pip install git+https://github.com/wagnerjoseph/dataviewer_joseph.git
+uv add git+https://github.com/wagnerjoseph/dataviewer_joseph.git
 ```
 
 For development (editable install with the repo cloned locally):

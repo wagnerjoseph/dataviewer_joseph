@@ -28,6 +28,7 @@ from .data import (
 )
 from .var_spec_editor import VarSpecEditor, create_var_spec_editor
 from .app import create_app
+from .prepare import prepare_dataviewer_data
 
 __version__ = "0.2.0"
 
@@ -37,6 +38,7 @@ __all__ = [
     "VarSpecEditor",
     "create_app",
     "create_var_spec_editor",
+    "prepare_dataviewer_data",
     "find_splits",
     "get_variable_names",
     "load_location_coordinates",

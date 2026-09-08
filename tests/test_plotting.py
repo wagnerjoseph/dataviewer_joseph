@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from dataviewer_geo.plotting.feature_importance import create_feature_importance_plot
-from dataviewer_geo.plotting.metrics_table import create_metrics_table
+from dataviewer_joseph.plotting.feature_importance import create_feature_importance_plot
+from dataviewer_joseph.plotting.metrics_table import create_metrics_table
 
 
 class TestCreateFeatureImportancePlot:

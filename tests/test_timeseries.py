@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from dataviewer_geo.data import DataIndex, load_timeseries_for_location
-from dataviewer_geo.plotting.timeseries import plot_location_timeseries
+from dataviewer_joseph.data import DataIndex, load_timeseries_for_location
+from dataviewer_joseph.plotting.timeseries import plot_location_timeseries
 
 
 class TestPlotLocationTimeseries:

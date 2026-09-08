@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from dataviewer_geo.config import DataConfig
-from dataviewer_geo.data import (
+from dataviewer_joseph.config import DataConfig
+from dataviewer_joseph.data import (
     DataIndex,
     find_splits,
     generate_dummy_data,

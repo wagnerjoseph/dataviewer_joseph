@@ -1,4 +1,4 @@
-"""Data loading and indexing for dataviewer_geo."""
+"""Data loading and indexing for dataviewer_joseph."""
 
 import logging
 from pathlib import Path
@@ -202,6 +202,61 @@ def load_feature_importance_for_location(
                 result[model_name] = fi_loc.iloc[0]
 
     return result if result else None
+
+
+def load_additional_data_for_location(
+    config: DataConfig,
+    split: str,
+    location_id: int,
+    tile_id: str | None = None,
+) -> pd.Series | None:
+    """Load additional data for a specific location.
+
+    Generalized version of load_feature_importance_for_location that loads
+    arbitrary per-location attributes from the additional_data subfolder.
+
+    Args:
+        config: DataConfig instance
+        split: Split name
+        location_id: Location ID to find
+        tile_id: Pre-computed tile ID (optional)
+
+    Returns:
+        pandas Series with attribute names as index, values as data, or None
+    """
+    additional_base = config.root / split / config.additional_data_subfolder
+    if not additional_base.exists():
+        return None
+
+    # Look up tile_id if not provided
+    if tile_id is None:
+        try:
+            lookup = load_location_lookup(config)
+            loc_row = lookup[lookup[config.id_column] == location_id]
+            if loc_row.empty:
+                return None
+            tile_id = loc_row[config.tile_col].iloc[0]
+        except Exception:
+            return None
+
+    # Load additional data tile
+    tile_file = additional_base / f"{tile_id}.parquet"
+    if not tile_file.exists():
+        return None
+
+    try:
+        df = pd.read_parquet(tile_file)
+        loc_row = df[df[config.id_column] == location_id]
+        if loc_row.empty:
+            return None
+
+        # Extract attributes (all columns except id_column)
+        attrs = loc_row.iloc[0].drop(config.id_column)
+        return attrs
+
+    except Exception as e:
+        logger.warning(f"Error loading additional data for location {location_id}: {e}")
+        return None
 
 
 def load_metrics_from_tile(

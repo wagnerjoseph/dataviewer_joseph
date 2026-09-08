@@ -1,4 +1,4 @@
-"""dataviewer_geo - Interactive geospatial timeseries data viewer.
+"""dataviewer_joseph - Interactive geospatial timeseries data viewer.
 
 Provides an interactive Panel/GeoViews application for exploring
 spatiotemporal Earth observation data with automatic discovery of
@@ -21,6 +21,7 @@ from .data import (
     load_variable_data,
     load_timeseries_for_location,
     load_feature_importance_for_location,
+    load_additional_data_for_location,
     load_metrics_from_tile,
     get_timeseries_variables,
     generate_dummy_data,
@@ -42,6 +43,7 @@ __all__ = [
     "load_variable_data",
     "load_timeseries_for_location",
     "load_feature_importance_for_location",
+    "load_additional_data_for_location",
     "load_metrics_from_tile",
     "get_timeseries_variables",
     "generate_dummy_data",

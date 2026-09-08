@@ -1,4 +1,4 @@
-"""Interactive map plotting for dataviewer_geo."""
+"""Interactive map plotting for dataviewer_joseph."""
 
 import logging
 import time

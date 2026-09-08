@@ -1,4 +1,4 @@
-"""Configuration for dataviewer_geo."""
+"""Configuration for dataviewer_joseph."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +19,7 @@ class DataConfig:
         timeseries_subfolder: Subfolder containing timeseries parquet files per tile
         feature_importance_subfolder: Subfolder containing feature importance data
         metrics_by_tile_subfolder: Subfolder containing metrics-by-tile parquet files
+        additional_data_subfolder: Subfolder containing additional per-location data
         lat_col: Name of latitude column in lookup
         lon_col: Name of longitude column in lookup
         tile_col: Name of tile identifier column in lookup
@@ -26,6 +27,8 @@ class DataConfig:
         fi_col_prefix: Prefix for feature importance columns
         metric_models: Model display names -> {metric: (column_suffix, direction)}
             direction is 'min' for RMSE/MAE, 'max' for Pearson
+        renderer_options: Available renderer types for additional data
+        default_renderer: Default renderer type for additional data
     """
 
     root: Path
@@ -35,6 +38,7 @@ class DataConfig:
     timeseries_subfolder: str = "timeseries"
     feature_importance_subfolder: str = "feature_importance"
     metrics_by_tile_subfolder: str = "metrics_by_tile"
+    additional_data_subfolder: str = "additional_data"
     lat_col: str = "lat"
     lon_col: str = "lon"
     tile_col: str = "tile_id"
@@ -71,6 +75,10 @@ class DataConfig:
             },
         }
     )
+    renderer_options: list[str] = field(
+        default_factory=lambda: ["bar", "scatter", "table", "histogram", "box"]
+    )
+    default_renderer: str = "bar"
 
     def __post_init__(self) -> None:
         if isinstance(self.root, str):

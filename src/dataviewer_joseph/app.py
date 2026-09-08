@@ -1,4 +1,15 @@
-"""Interactive Panel application for dataviewer_geo."""
+"""Interactive Panel application for dataviewer_joseph.
+
+Features:
+- Interactive map with OSM basemap and clickable points
+- Split and variable selectors
+- Location ID input (or click on map)
+- Timeseries via plotting_joseph with var_specs editor
+- Feature importance bar charts (legacy)
+- Metrics comparison table (3x3 with RMSE, MAE, Pearson)
+- Additional data viewer with selectable renderer (bar, scatter, table, histogram, box)
+- Auto-discovery of splits, variables, and locations from parquet files
+"""
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +30,7 @@ from .data import (
     load_location_lookup,
     load_timeseries_for_location,
     load_feature_importance_for_location,
+    load_additional_data_for_location,
     load_metrics_from_tile,
     get_timeseries_variables,
 )
@@ -27,6 +39,8 @@ from .plotting import (
     create_feature_importance_plot,
     create_metrics_table,
     add_dynamic_sizing,
+    render_additional_data,
+    create_renderer_selector,
 )
 from .var_spec_editor import VarSpecEditor
 
@@ -77,6 +91,8 @@ def create_app(config: DataConfig) -> pn.Column:
         "updating_location_input": False,
         "last_plot_location_id": None,
         "var_spec_editor": None,
+        "renderer_selector": None,
+        "additional_data": None,
     }
 
     # =============================================================================
@@ -110,6 +126,21 @@ def create_app(config: DataConfig) -> pn.Column:
         value=False, size=25, name="Loading…"
     )
 
+    # Renderer selector for additional data
+    def on_renderer_change(renderer_type):
+        """Re-render additional data when renderer type changes."""
+        additional_data = state.get("additional_data")
+        if additional_data is not None:
+            render_and_display_additional_data(additional_data)
+
+    renderer_selector = create_renderer_selector(
+        available_renderers=config.renderer_options,
+        default_renderer=config.default_renderer,
+        on_change=on_renderer_change,
+        auto_suggest=True,
+    )
+    state["renderer_selector"] = renderer_selector
+
     # =============================================================================
     # PANES
     # =============================================================================
@@ -140,6 +171,13 @@ def create_app(config: DataConfig) -> pn.Column:
 
     metrics_table_pane = pn.Column(
         sizing_mode="stretch_both",
+        margin=0,
+        styles={"padding": "0"},
+    )
+
+    additional_data_pane = pn.Column(
+        sizing_mode="fixed",
+        width=800,
         margin=0,
         styles={"padding": "0"},
     )
@@ -269,6 +307,19 @@ def create_app(config: DataConfig) -> pn.Column:
                     feature_importance_pane.append(
                         pn.pane.Markdown("Select a location to view feature importance")
                     )
+                
+                # Load and render additional data
+                additional_data = load_additional_data_for_location(
+                    config, split_dir, location_id, tile_id
+                )
+                state["additional_data"] = additional_data
+                if additional_data is not None:
+                    render_and_display_additional_data(additional_data)
+                else:
+                    additional_data_pane.clear()
+                    additional_data_pane.append(
+                        pn.pane.Markdown("Select a location to view additional data")
+                    )
             else:
                 state["last_plot_location_id"] = None
                 timeseries_pane.clear()
@@ -285,6 +336,10 @@ def create_app(config: DataConfig) -> pn.Column:
                 feature_importance_pane.append(
                     pn.pane.Markdown("Select a location to view feature importance")
                 )
+                additional_data_pane.clear()
+                additional_data_pane.append(
+                    pn.pane.Markdown("Select a location to view additional data")
+                )
 
         except Exception as e:
             import traceback
@@ -299,6 +354,42 @@ def create_app(config: DataConfig) -> pn.Column:
             feature_importance_pane.clear()
             feature_importance_pane.append(
                 pn.pane.Markdown("Error loading feature importance")
+            )
+            additional_data_pane.clear()
+            additional_data_pane.append(
+                pn.pane.Markdown("Error loading additional data")
+            )
+
+    def render_and_display_additional_data(attrs):
+        """Render additional data using selected renderer and display it.
+        
+        Args:
+            attrs: pandas Series with attribute names as index
+        """
+        renderer_selector = state.get("renderer_selector")
+        if renderer_selector is None:
+            return
+        
+        renderer_type = renderer_selector.get_renderer_type()
+        
+        # Update selector with data characteristics (for auto-suggest)
+        renderer_selector.set_data(attrs)
+        
+        try:
+            plot = render_additional_data(
+                attrs,
+                renderer_type=renderer_type,
+                title="Additional Data",
+                width=400,
+                height=300,
+            )
+            additional_data_pane.clear()
+            additional_data_pane.append(plot)
+        except Exception as e:
+            logger.warning(f"Error rendering additional data: {e}")
+            additional_data_pane.clear()
+            additional_data_pane.append(
+                pn.pane.Markdown(f"Error rendering: {str(e)}")
             )
 
     def regenerate_timeseries():
@@ -767,6 +858,7 @@ def create_app(config: DataConfig) -> pn.Column:
     bottom_row = pn.Row(
         metrics_table_pane,
         feature_importance_pane,
+        additional_data_pane,
         sizing_mode="fixed",
         height=420,
         styles={
@@ -818,6 +910,12 @@ def create_app(config: DataConfig) -> pn.Column:
             loading_indicator,
         ),
         info_pane,
+        # Renderer selector for additional data
+        pn.Row(
+            renderer_selector.layout,
+            sizing_mode="fixed",
+            height=80,
+        ),
         var_spec_accordion,
         main_layout,
         sizing_mode="stretch_width",

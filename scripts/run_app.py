@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Run the dataviewer_geo application."""
+"""Run the dataviewer_joseph application."""
 
 import argparse
 from pathlib import Path
 
-from dataviewer_geo import DataConfig, create_app, generate_dummy_data
+from dataviewer_joseph import DataConfig, create_app, generate_dummy_data
 
 
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Run the dataviewer_geo application"
+        description="Run the dataviewer_joseph application"
     )
     parser.add_argument(
         "--data",
@@ -47,7 +47,7 @@ def main() -> None:
     config = DataConfig(root=data_path)
 
     # Create the app
-    print(f"\nStarting dataviewer_geo app...")
+    print(f"\nStarting dataviewer_joseph app...")
     print(f"Data directory: {data_path}")
     app = create_app(config)
 

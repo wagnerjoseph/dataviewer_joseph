@@ -1,4 +1,4 @@
-"""Test fixtures for dataviewer_geo."""
+"""Test fixtures for dataviewer_joseph."""
 
 import shutil
 import tempfile
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from dataviewer_geo.config import DataConfig
-from dataviewer_geo.data import generate_dummy_data
+from dataviewer_joseph.config import DataConfig
+from dataviewer_joseph.data import generate_dummy_data
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from dataviewer_geo import (
+from dataviewer_joseph import (
     DataConfig,
     DataIndex,
     create_interactive_map,

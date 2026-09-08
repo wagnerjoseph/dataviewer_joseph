@@ -4,13 +4,13 @@
 import argparse
 from pathlib import Path
 
-from dataviewer_geo.data import generate_dummy_data
+from dataviewer_joseph.data import generate_dummy_data
 
 
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Generate dummy data for dataviewer_geo testing"
+        description="Generate dummy data for dataviewer_joseph testing"
     )
     parser.add_argument(
         "--output",

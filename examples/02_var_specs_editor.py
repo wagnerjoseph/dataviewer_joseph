@@ -3,14 +3,14 @@
 
 from pathlib import Path
 
-from dataviewer_geo import (
+from dataviewer_joseph import (
     DataConfig,
     DataIndex,
     VarSpecEditor,
     generate_dummy_data,
     load_timeseries_for_location,
 )
-from dataviewer_geo.plotting import plot_location_timeseries
+from dataviewer_joseph.plotting import plot_location_timeseries
 
 
 def main() -> None:

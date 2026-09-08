@@ -1,6 +1,6 @@
 """Tests for var_spec_editor."""
 
-from dataviewer_geo.var_spec_editor import VarSpecEditor, create_var_spec_editor
+from dataviewer_joseph.var_spec_editor import VarSpecEditor, create_var_spec_editor
 
 
 class TestVarSpecEditor:

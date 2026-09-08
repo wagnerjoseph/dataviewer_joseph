@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Basic example: Create and display the dataviewer_geo app."""
+"""Basic example: Create and display the dataviewer_joseph app."""
 
 from pathlib import Path
 
-from dataviewer_geo import DataConfig, create_app, generate_dummy_data, DataIndex
+from dataviewer_joseph import DataConfig, create_app, generate_dummy_data, DataIndex
 
 # Generate dummy data for demonstration
 data_root = Path("/tmp/dataviewer_example_data")

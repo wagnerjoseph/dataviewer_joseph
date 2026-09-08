@@ -1,4 +1,4 @@
-# dataviewer_geo
+# dataviewer_joseph
 
 Interactive geospatial timeseries data viewer for Earth observation data with integrated ML model evaluation.
 
@@ -9,14 +9,16 @@ Interactive geospatial timeseries data viewer for Earth observation data with in
 - **Interactive var_specs Editor**: Configure timeseries plots without code - add variables, overlays, secondary axes, thresholds, seasons, correlations via Panel widgets
 - **Feature Importance**: Horizontal bar charts for ML model feature importance
 - **Metrics Table**: 3×3 comparison table (RMSE, MAE, Pearson) with best values starred
+- **Additional Data Viewer**: Per-location attributes with selectable renderer (bar, scatter, table, histogram, box)
 - **Auto-Discovery**: Automatically discovers splits, variables, and locations from parquet files
+- **Data Preparation Tool**: CLI to prepare data from raw inputs into dataviewer-ready format
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/wagnerjoseph/dataviewer_geo.git
-cd dataviewer_geo
+git clone https://github.com/wagnerjoseph/dataviewer_joseph.git
+cd dataviewer_joseph
 
 # Set up virtual environment with uv
 uv sync
@@ -31,7 +33,7 @@ uv pip install -e .
 
 ```python
 from pathlib import Path
-from dataviewer_geo import generate_dummy_data, create_app, DataConfig
+from dataviewer_joseph import generate_dummy_data, create_app, DataConfig
 
 # Generate sample data
 data_root = Path("/tmp/test_data")
@@ -81,6 +83,52 @@ data_root/
     └── ...
 ```
 
+## Data Preparation
+
+Use the included preparation script to convert your raw data into the dataviewer format:
+
+```bash
+uv run python scripts/prepare_data.py \
+    --lookup /path/to/lookup_tables \
+    --map-data /path/to/map_data \
+    --timeseries /path/to/timeseries \
+    --additional-data /path/to/additional_data \
+    --output /path/to/output \
+    --name dataviewer_auto
+```
+
+### Input Folders
+
+- **`--lookup`**: Directory containing `ers_tile_id_location_id.parquet` (location_id, lat, lon, tile_id)
+- **`--map-data`**: Directory with split subfolders containing tile parquet files **without** time column (for map visualization)
+- **`--timeseries`**: Directory with split subfolders containing tile parquet files **with** time column
+- **`--additional-data`** (optional): Directory with split subfolders containing per-location attribute files
+
+All folders should have matching split subfolder names (e.g., `split_1991_2015__2016_2023/`).
+
+### Output Structure
+
+The script creates `dataviewer_auto/` with:
+- Lookup table copied to root
+- Map data split into `metrics_global_plot/` (per variable) and `metrics_by_tile/` (per tile)
+- Timeseries copied to `timeseries/` (per tile)
+- Additional data copied to `additional_data/` (per tile)
+
+### Example
+
+```bash
+# Prepare data from your raw inputs
+uv run python scripts/prepare_data.py \
+    --lookup /data/lookup \
+    --map-data /data/map \
+    --timeseries /data/ts \
+    --additional-data /data/attrs \
+    --output /data/output
+
+# Run the dataviewer with prepared data
+uv run python scripts/run_app.py --data /data/output/dataviewer_auto --show
+```
+
 ## Using the var_specs Editor
 
 The var_specs editor lets you configure timeseries plots interactively:
@@ -101,18 +149,53 @@ The var_specs editor lets you configure timeseries plots interactively:
 
 The editor generates a `var_specs` list that is passed to `plotting_joseph.plot_time_series`.
 
+## Additional Data Renderer
+
+When you select a location, per-location attributes from the `additional_data/` folder are displayed with a selectable plot style:
+
+### Available Renderers
+
+- **bar**: Horizontal bar chart (best for ranked numeric values)
+- **scatter**: Scatter plot (best for comparing multiple numeric attributes)
+- **table**: Key-value table (best for mixed types or detailed inspection)
+- **histogram**: Distribution histogram (best for single numeric attribute with many values)
+- **box**: Box plot (best for statistical summary)
+
+### Usage
+
+1. Select a location on the map or enter Location ID
+2. Use the "Plot Style" dropdown to choose how to visualize the additional data
+3. The renderer auto-suggests the best plot type based on data characteristics:
+   - Numeric data with few values → bar chart
+   - Many numeric values → histogram
+   - Mixed types → table
+
+### Data Format
+
+Additional data files should be parquet with:
+- `location_id` column
+- One or more attribute columns (any type)
+
+Example:
+```
+location_id | attribute1 | attribute2 | attribute3
+123         | 0.85       | 15.2       | "forest"
+456         | 0.92       | 12.1       | "urban"
+```
+
 ## API Reference
 
 ### Data Loading
 
 ```python
-from dataviewer_geo import (
+from dataviewer_joseph import (
     DataConfig,
     DataIndex,
     find_splits,
     get_variable_names,
     load_timeseries_for_location,
     load_feature_importance_for_location,
+    load_additional_data_for_location,
     load_metrics_from_tile,
     get_timeseries_variables,
 )
@@ -133,7 +216,7 @@ ts_data = load_timeseries_for_location(config, "split_1", location_id=123)
 ### var_specs Editor
 
 ```python
-from dataviewer_geo import VarSpecEditor
+from dataviewer_joseph import VarSpecEditor
 
 # Create editor with available variables
 editor = VarSpecEditor(available_variables=["backscatter40", "lai", "swvl1"])
@@ -151,7 +234,7 @@ var_specs = editor.to_var_specs()
 ### Plotting
 
 ```python
-from dataviewer_geo.plotting import (
+from dataviewer_joseph.plotting import (
     plot_location_timeseries,
     create_feature_importance_plot,
     create_metrics_table,
@@ -174,7 +257,7 @@ metrics_table = create_metrics_table(metrics)
 ### Configuration
 
 ```python
-from dataviewer_geo import DataConfig
+from dataviewer_joseph import DataConfig
 
 # Default backscatter schema
 config = DataConfig(root="/path/to/data")

@@ -1,7 +1,7 @@
 """Tests for the Panel application."""
 
-from dataviewer_geo.app import create_app
-from dataviewer_geo.config import DataConfig
+from dataviewer_joseph.app import create_app
+from dataviewer_joseph.config import DataConfig
 
 
 class TestCreateApp:

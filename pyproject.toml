@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dataviewer_geo"
+name = "dataviewer_joseph"
 version = "0.1.0"
 description = "Interactive geospatial timeseries data viewer for Earth observation data"
 readme = "README.md"
@@ -37,18 +37,18 @@ dependencies = [
     "holoviews>=1.17",
     "geoviews>=1.10",
     "bokeh>=3.3",
-    "plotting-joseph @ git+https://github.com/wagnerjoseph/plotting_geo.git",
+    "plotting-joseph",
 ]
 
 [project.urls]
-Repository = "https://github.com/wagnerjoseph/dataviewer_geo"
-Documentation = "https://github.com/wagnerjoseph/dataviewer_geo"
+Repository = "https://github.com/wagnerjoseph/dataviewer_joseph"
+Documentation = "https://github.com/wagnerjoseph/dataviewer_joseph"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.1"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dataviewer_geo"]
+packages = ["src/dataviewer_joseph"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

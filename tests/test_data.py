@@ -34,6 +34,18 @@ class TestFindSplits:
         splits = find_splits(config)
         assert len(splits) == 0
 
+    def test_root_level_single_split(self, tmp_path):
+        """Test that data at the root is treated as a single implicit split."""
+        metrics_dir = tmp_path / "metrics_global_plot"
+        metrics_dir.mkdir(parents=True)
+        pd.DataFrame({"location_id": [1, 2], "rmse": [0.5, 0.6]}).to_parquet(
+            metrics_dir / "rmse.parquet"
+        )
+
+        config = DataConfig(root=tmp_path)
+        splits = find_splits(config)
+        assert splits == ["."]
+
 
 class TestGetVariableNames:
     """Tests for get_variable_names function."""

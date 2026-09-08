@@ -97,6 +97,7 @@ def create_app(config: DataConfig) -> pn.Column:
     # =============================================================================
 
     available_splits = find_splits(config)
+    single_split = len(available_splits) <= 1
     split_select = pn.widgets.Select(
         name="Split",
         options={s: s for s in available_splits},
@@ -855,16 +856,17 @@ def create_app(config: DataConfig) -> pn.Column:
         active=[],
     )
 
+    controls = [variable_select, location_input, loading_indicator]
+    if not single_split:
+        controls.insert(0, split_select)
+
     return pn.Column(
         pn.pane.Markdown(
             "# Dataviewer",
             sizing_mode="stretch_width",
         ),
         pn.Row(
-            split_select,
-            variable_select,
-            location_input,
-            loading_indicator,
+            *controls,
         ),
         info_pane,
         # Renderer selector for additional data

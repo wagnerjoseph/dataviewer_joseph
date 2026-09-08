@@ -15,13 +15,17 @@ logger = logging.getLogger(__name__)
 def find_splits(config: DataConfig) -> list[str]:
     """Find all splits in the data root directory.
 
-    Splits are subdirectories containing the metrics_subfolder with parquet files.
+    Splits are subdirectories containing the metrics_subfolder with parquet
+    files. If no such subdirectories exist, the data may be laid out directly
+    under the root; in that case a single implicit split ``"."`` (the root
+    itself) is returned so the split dimension can be ignored.
 
     Args:
         config: DataConfig with root path
 
     Returns:
-        List of split names (sorted alphabetically)
+        List of split names (sorted alphabetically). ``["."]`` for data placed
+        directly in the root, ``[]`` when no data is found at all.
     """
     splits = []
     for item in config.root.iterdir():
@@ -29,7 +33,16 @@ def find_splits(config: DataConfig) -> list[str]:
             metrics_dir = item / config.metrics_subfolder
             if metrics_dir.exists() and any(metrics_dir.glob("*.parquet")):
                 splits.append(item.name)
-    return sorted(splits)
+
+    if splits:
+        return sorted(splits)
+
+    # No split subfolders: fall back to a single implicit split at the root.
+    metrics_dir = config.root / config.metrics_subfolder
+    if metrics_dir.exists() and any(metrics_dir.glob("*.parquet")):
+        return ["."]
+
+    return []
 
 
 def get_variable_names(config: DataConfig, split: str) -> list[str]:

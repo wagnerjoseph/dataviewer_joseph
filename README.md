@@ -49,14 +49,16 @@ from dataviewer_joseph.prepare import prepare_dataviewer_data
 
 out = prepare_dataviewer_data(
     lookup_dir="/path/to/lookup_tables",      # ers_tile_id_location_id.parquet
-    map_data_dir="/path/to/map_data",         # split folders, no time column
-    timeseries_dir="/path/to/timeseries",     # split folders, with time column
+    map_data_dir="/path/to/map_data",         # tiles, no time column
+    timeseries_dir="/path/to/timeseries",     # tiles, with time column
     additional_data_dir="/path/to/additional_data",  # optional
     output_dir="/path/to/output",
     output_name="dataviewer_auto",
 )
 print(out)   # path to the prepared data
 ```
+
+The map/timeseries tiles can be inside `split_*` subfolders, **or** placed directly in the folders (treated as a single split — that works too).
 
 Point the app at a prepared data folder and launch it:
 

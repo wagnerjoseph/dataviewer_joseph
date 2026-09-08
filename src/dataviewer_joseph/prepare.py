@@ -17,43 +17,58 @@ import pyarrow.parquet as pq
 logger = logging.getLogger(__name__)
 
 
+def _has_parquet(directory: Path) -> bool:
+    """Return True if the directory contains any parquet file."""
+    return bool(list(directory.glob("*.parquet")))
+
+
 def discover_splits(
     map_data_dir: Path,
     timeseries_dir: Path,
 ) -> list[str]:
     """Discover splits that exist in both map_data and timeseries directories.
-    
+
     Args:
         map_data_dir: Directory with split subfolders containing map data tiles
         timeseries_dir: Directory with split subfolders containing timeseries tiles
-        
+
     Returns:
-        List of split names present in both directories
-        
+        List of split names present in both directories. If neither directory
+        has split subfolders but both contain parquet tiles directly, a single
+        implicit split ``"."`` (the root) is returned so the data is handled as
+        one split.
+
     Warns about splits missing from either directory.
     """
     map_splits = {d.name for d in map_data_dir.iterdir() if d.is_dir() and not d.name.startswith(".")}
     ts_splits = {d.name for d in timeseries_dir.iterdir() if d.is_dir() and not d.name.startswith(".")}
-    
+
     # Warn about mismatches
     missing_in_map = ts_splits - map_splits
     missing_in_ts = map_splits - ts_splits
-    
+
     if missing_in_map:
         logger.warning(f"Splits found in timeseries but not in map_data: {missing_in_map}")
     if missing_in_ts:
         logger.warning(f"Splits found in map_data but not in timeseries: {missing_in_ts}")
-    
+
     # Return intersection
     common_splits = sorted(map_splits & ts_splits)
-    
-    if not common_splits:
-        raise ValueError(
-            f"No common splits found between map_data and timeseries. "
-            f"map_data has: {map_splits}, timeseries has: {ts_splits}"
-        )
-    
-    return common_splits
+    if common_splits:
+        return common_splits
+
+    # No split subfolders: if both directories hold tiles directly, treat the
+    # root of each as a single implicit split (matches find_splits in data.py).
+    if _has_parquet(map_data_dir) and _has_parquet(timeseries_dir):
+        return ["."]
+
+    raise ValueError(
+        f"No common splits found between map_data and timeseries: "
+        f"map_data has {map_splits}, timeseries has {ts_splits}. "
+        f"Expected split subfolders in both (e.g. split_1/), or parquet tiles "
+        f"placed directly in {map_data_dir} and {timeseries_dir} "
+        f"(which is treated as a single split)."
+    )
 
 
 def copy_lookup_table(
@@ -357,7 +372,8 @@ def prepare_dataviewer_data(
     
     # Process each split
     for split_name in splits:
-        logger.info(f"\nProcessing split: {split_name}")
+        split_label = "(root)" if split_name == "." else split_name
+        logger.info(f"\nProcessing split: {split_label}")
         output_split_dir = output_path / split_name
         
         # Map data

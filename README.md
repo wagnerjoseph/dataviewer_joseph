@@ -1,37 +1,29 @@
 # dataviewer_joseph
 
-Interactive geospatial timeseries data viewer for Earth observation data with integrated ML model evaluation.
+Interactive geospatial timeseries data viewer. It plots your Earth-observation data on a map, lets you click a location, and shows its timeseries, per-location values, and attributes — all from a set of parquet files, no coding required.
 
 ## Features
 
-- **Interactive Map**: GeoViews-based map with OSM basemap, clickable points, and highlight markers
-- **Timeseries Visualization**: Multi-panel timeseries via `plotting_joseph` with configurable `var_specs`
-- **Interactive var_specs Editor**: Configure timeseries plots without code - add variables, overlays, secondary axes, thresholds, seasons, correlations via Panel widgets
-- **Map Data Table**: All variable values for the selected location in a single table
-- **Additional Data Viewer**: Per-location attributes with selectable renderer (bar, scatter, table, histogram, box)
-- **Auto-Discovery**: Automatically discovers splits, variables, and locations from parquet files
-- **Data Preparation Tool**: CLI to prepare data from raw inputs into dataviewer-ready format
+- **Interactive Map**: GeoViews map with clickable points and location highlighting
+- **Timeseries Visualization**: Multi-panel timeseries, configurable interactively without code
+- **Map Data Table**: All variable values for the selected location in one table
+- **Additional Data Viewer**: Per-location attributes with selectable plot style
+- **Auto-Discovery**: Automatically finds splits, variables, and locations from your data
+- **Data Preparation Tool**: Convert raw data into the expected format easily
 
 ## Installation
 
-Install the package directly from GitHub (no need to clone the repository):
+Install the package into your project (any Python project using `uv`):
 
 ```bash
 uv add git+https://github.com/wagnerjoseph/dataviewer_joseph.git
 ```
 
-For development (editable install with the repo cloned locally):
-
-```bash
-git clone https://github.com/wagnerjoseph/dataviewer_joseph.git
-cd dataviewer_joseph
-uv sync
-uv pip install -e .
-```
+That's it — no need to clone the repository.
 
 ## Quick Start
 
-### Using Dummy Data
+The fastest way to see it working is with generated sample data. This opens the viewer in a **new browser tab**:
 
 ```python
 from pathlib import Path
@@ -42,26 +34,50 @@ data_root = Path("/tmp/test_data")
 generate_dummy_data(data_root, n_locations=100, n_tiles=4)
 
 # Create and launch the app in your browser
-config = DataConfig(root=data_root)
-app = create_app(config)
+app = create_app(DataConfig(root=data_root))
 app.show()   # opens the viewer in a new browser tab
 ```
 
-`app.show()` starts a local server and opens the viewer in your default browser. (`.servable()` is only for embedding in Jupyter notebooks and does not launch a standalone viewer.)
+## Running the App
 
-### Running the App
+`app.show()` starts a local server and opens the viewer in a separate browser tab. This works the same way in a console script and in a notebook.
+
+### From the console
+
+Save the snippet above as `run.py` and run it:
 
 ```bash
-# Serve the app
-panel serve scripts/run_app.py --show
+python run.py
+```
 
-# Or with custom data
-python scripts/run_app.py --data /path/to/data/dataviewer
+### From a notebook
+
+The exact same `app.show()` works in a Jupyter notebook and opens a separate browser tab:
+
+```python
+from dataviewer_joseph import create_app, DataConfig, generate_dummy_data
+
+data_root = generate_dummy_data("/tmp/test_data")  # returns a DataConfig
+app = create_app(data_root)
+app.show()
+```
+
+> **Note:** `.servable()` is only for serving a notebook via `panel serve` and does **not** launch a standalone viewer. Use `app.show()` instead.
+
+### With your own data
+
+Point the app at a prepared data folder and launch it:
+
+```python
+from dataviewer_joseph import create_app, DataConfig
+
+app = create_app(DataConfig(root="/path/to/my/data/dataviewer_auto"))
+app.show()
 ```
 
 ## Data Structure
 
-The app expects data in the following structure (all column/subfolder names are configurable):
+The app reads a root folder containing a lookup table and numbered `split_*` subfolders. All column and folder names are configurable; this is the default layout:
 
 ```
 data_root/
@@ -69,257 +85,97 @@ data_root/
 ├── split_1/
 │   ├── metrics_global_plot/           # per-variable map data
 │   │   ├── variable_a.parquet         # location_id, variable_a
-│   │   ├── variable_b.parquet         # location_id, variable_b
 │   │   └── ...
 │   ├── additional_data/               # per-location attributes
-│   │   ├── 0001.parquet               # location_id + attribute columns
-│   │   └── ...
+│   │   └── 0001.parquet               # location_id + attribute columns
 │   └── timeseries/
-│       ├── 0001.parquet               # location_id, time, variable_A, variable_B, ...
-│       └── ...
+│       └── 0001.parquet               # location_id, time, variable_A, ...
 └── split_2/
     └── ...
 ```
 
-## Data Preparation
+## Preparing Your Data
 
-Use the included preparation script to convert your raw data into the dataviewer format:
-
-```bash
-uv run python scripts/prepare_data.py \
-    --lookup /path/to/lookup_tables \
-    --map-data /path/to/map_data \
-    --timeseries /path/to/timeseries \
-    --additional-data /path/to/additional_data \
-    --output /path/to/output \
-    --name dataviewer_auto
-```
-
-### Input Folders
-
-- **`--lookup`**: Directory containing `ers_tile_id_location_id.parquet` (location_id, lat, lon, tile_id)
-- **`--map-data`**: Directory with split subfolders containing tile parquet files **without** time column (for map visualization)
-- **`--timeseries`**: Directory with split subfolders containing tile parquet files **with** time column
-- **`--additional-data`** (optional): Directory with split subfolders containing per-location attribute files
-
-All folders should have matching split subfolder names (e.g., `split_1991_2015__2016_2023/`).
-
-### Output Structure
-
-The script creates `dataviewer_auto/` with:
-- Lookup table copied to root
-- Map data split into `metrics_global_plot/` (one file per variable)
-- Timeseries copied to `timeseries/` (per tile)
-- Additional data copied to `additional_data/` (per tile)
-
-### Example
-
-```bash
-# Prepare data from your raw inputs
-uv run python scripts/prepare_data.py \
-    --lookup /data/lookup \
-    --map-data /data/map \
-    --timeseries /data/ts \
-    --additional-data /data/attrs \
-    --output /data/output
-
-# Run the dataviewer with prepared data
-uv run python scripts/run_app.py --data /data/output/dataviewer_auto --show
-```
-
-## Using the var_specs Editor
-
-The var_specs editor lets you configure timeseries plots interactively:
-
-1. **Add Variables**: Click "Add Variable" to add a new panel
-2. **Configure Each Variable**:
-   - **Name**: Select the data column to plot
-   - **Label**: Display label for y-axis
-   - **Color**: Line color
-   - **Line Width/Alpha**: Styling
-   - **Plot Style**: line, points, or both
-   - **Show Seasons**: Overlay JJA/DJF markers
-   - **Interpolate**: Interpolate NaN values
-3. **Overlays**: Set "Overlay On" to add a variable to an existing panel
-4. **Secondary Axis**: Check "Add Second Y-Axis" for overlays
-5. **Thresholds**: Set lower/upper threshold values and colors for shading
-6. **Correlation**: Check "Show Correlation" to display Pearson+Spearman correlation
-
-The editor generates a `var_specs` list that is passed to `plotting_joseph.plot_time_series`.
-
-## Additional Data Renderer
-
-When you select a location, per-location attributes from the `additional_data/` folder are displayed with a selectable plot style:
-
-### Available Renderers
-
-- **bar**: Horizontal bar chart (best for ranked numeric values)
-- **scatter**: Scatter plot (best for comparing multiple numeric attributes)
-- **table**: Key-value table (best for mixed types or detailed inspection)
-- **histogram**: Distribution histogram (best for single numeric attribute with many values)
-- **box**: Box plot (best for statistical summary)
-
-### Usage
-
-1. Select a location on the map or enter Location ID
-2. Use the "Plot Style" dropdown to choose how to visualize the additional data
-3. The renderer auto-suggests the best plot type based on data characteristics:
-   - Numeric data with few values → bar chart
-   - Many numeric values → histogram
-   - Mixed types → table
-
-### Data Format
-
-Additional data files should be parquet with:
-- `location_id` column
-- One or more attribute columns (any type)
-
-Example:
-```
-location_id | attribute1 | attribute2 | attribute3
-123         | 0.85       | 15.2       | "forest"
-456         | 0.92       | 12.1       | "urban"
-```
-
-## API Reference
-
-### Data Loading
+The `prepare` module converts your raw data into the expected layout. This works in any project after installing the package:
 
 ```python
-from dataviewer_joseph import (
-    DataConfig,
-    DataIndex,
-    find_splits,
-    get_variable_names,
-    load_timeseries_for_location,
-    load_map_data_for_location,
-    load_additional_data_for_location,
-    get_timeseries_variables,
+from dataviewer_joseph.prepare import prepare_dataviewer_data
+
+out = prepare_dataviewer_data(
+    lookup_dir="/path/to/lookup_tables",      # ers_tile_id_location_id.parquet
+    map_data_dir="/path/to/map_data",         # split folders, no time column
+    timeseries_dir="/path/to/timeseries",     # split folders, with time column
+    additional_data_dir="/path/to/additional_data",  # optional
+    output_dir="/path/to/output",
+    output_name="dataviewer_auto",
 )
-
-config = DataConfig(root="/path/to/data")
-index = DataIndex(config)
-
-# Discover available splits
-print(index.splits)
-
-# Get timeseries variables for var_specs editor
-ts_vars = get_timeseries_variables(config, "split_1")
-
-# Load timeseries for a location
-ts_data = load_timeseries_for_location(config, "split_1", location_id=123)
-
-# Load all map-data variable values for a location
-map_values = load_map_data_for_location(config, "split_1", location_id=123)
+print(out)   # path to the prepared data
 ```
 
-### var_specs Editor
+## Using the Viewer
+
+1. Choose a **Split** and **Variable** for the map.
+2. Click a point on the map, or type a **Location ID**, to select a location.
+3. The selected location shows its **timeseries**, a **table with all its variable values** from the map data, and its **additional data**.
+4. Use the **Plot Style** dropdown to change how the additional data is rendered (bar, scatter, table, histogram, box).
+
+## API Reference (brief)
 
 ```python
-from dataviewer_joseph import VarSpecEditor
+from dataviewer_joseph import DataConfig, DataIndex
 
-# Create editor with available variables
-editor = VarSpecEditor(available_variables=["backscatter40", "lai", "swvl1"])
-editor.add_var("backscatter40")
-editor.add_var("lai")
+config = DataConfig(root="/path/to/data")          # customize column/folder names here
+index = DataIndex(config)                           # discovers splits & locations
 
-# Configure via widgets
-editor._var_widgets[0]["label"].value = "Backscatter [dB]"
-editor._var_widgets[0]["color"].value = "#0000ff"
-
-# Collect var_specs for plotting
-var_specs = editor.to_var_specs()
+print(index.splits)                                  # available splits
 ```
 
-### Plotting
+Main data loaders (all take `config`, `split`, `location_id`):
 
-```python
-from dataviewer_joseph.plotting import (
-    plot_location_timeseries,
-    create_map_data_table,
-)
-
-# Plot timeseries with var_specs
-figs = plot_location_timeseries(
-    data=ts_data,
-    location_ids=[123],
-    var_specs=var_specs,
-)
-
-# Map data table (all variables for a location)
-map_table = create_map_data_table(map_values)
-```
-
-### Configuration
-
-```python
-from dataviewer_joseph import DataConfig
-
-# Default schema
-config = DataConfig(root="/path/to/data")
-
-# Custom schema
-config = DataConfig(
-    root="/path/to/data",
-    id_column="location_id",
-    lookup_file="ers_tile_id_location_id.parquet",
-    metrics_subfolder="metrics_global_plot",
-    timeseries_subfolder="timeseries",
-    additional_data_subfolder="additional_data",
-)
-```
+- `load_timeseries_for_location(...)` — timeseries rows
+- `load_map_data_for_location(...)` — all variable values from the map data
+- `load_additional_data_for_location(...)` — per-location attributes
 
 ## Development
 
-### Running Tests
+For contributors working on the source repository.
 
 ```bash
-uv run pytest tests/ -v
+# Clone and set up
+git clone https://github.com/wagnerjoseph/dataviewer_joseph.git
+cd dataviewer_joseph
+uv sync
+uv pip install -e .
 ```
 
-### Code Quality
+Run the app with the included script and sample data:
 
 ```bash
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
+uv run python scripts/run_app.py --show                  # dummy data
+uv run python scripts/run_app.py --data /path/to/data --show
 ```
 
-### Generating Dummy Data
+Generate dummy data and run tests/lint:
 
 ```bash
 uv run python scripts/generate_dummy_data.py --output /tmp/test_data --locations 100
+uv run pytest tests/ -v
+uv run ruff check src/ tests/
 ```
 
-## Examples
+See the `examples/` directory for complete example scripts.
 
-See the `examples/` directory for complete examples:
-
-- `examples/01_basic_app.py` - Basic app usage with dummy data
-- `examples/02_var_specs_editor.py` - Interactive var_specs configuration
-
-## Dependencies
-
-- `panel` - Web application framework
-- `holoviews` - Declarative objects for data visualization
-- `geoviews` - Geospatial extensions for HoloViews
-- `bokeh` - Interactive visualization library
-- `pandas` - Data manipulation
-- `numpy` - Numerical computing
-- `matplotlib` - Plotting
-- `pyarrow` - Fast parquet I/O
-- `plotting_joseph` - Multi-panel timeseries plotting with var_specs
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Contributing
+### Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
 4. Run tests: `uv run pytest`
 5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details.
 
 ## Contact
 

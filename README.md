@@ -21,7 +21,7 @@ uv add git+https://github.com/wagnerjoseph/dataviewer_joseph.git
 
 That's it — no need to clone the repository.
 
-## Quick Start
+## Dummy data
 
 The fastest way to see it working is with generated sample data. This opens the viewer in a **new browser tab**:
 
@@ -38,63 +38,9 @@ app = create_app(DataConfig(root=data_root))
 app.show()   # opens the viewer in a new browser tab
 ```
 
-## Running the App
+## With your own data
 
-`app.show()` starts a local server and opens the viewer in a separate browser tab. This works the same way in a console script and in a notebook.
-
-### From the console
-
-Save the snippet above as `run.py` and run it:
-
-```bash
-python run.py
-```
-
-### From a notebook
-
-The exact same `app.show()` works in a Jupyter notebook and opens a separate browser tab:
-
-```python
-from dataviewer_joseph import create_app, DataConfig, generate_dummy_data
-
-data_root = generate_dummy_data("/tmp/test_data")  # returns a DataConfig
-app = create_app(data_root)
-app.show()
-```
-
-> **Note:** `.servable()` is only for serving a notebook via `panel serve` and does **not** launch a standalone viewer. Use `app.show()` instead.
-
-### With your own data
-
-Point the app at a prepared data folder and launch it:
-
-```python
-from dataviewer_joseph import create_app, DataConfig
-
-app = create_app(DataConfig(root="/path/to/my/data/dataviewer_auto"))
-app.show()
-```
-
-## Data Structure
-
-The app reads a root folder containing a lookup table and numbered `split_*` subfolders. All column and folder names are configurable; this is the default layout:
-
-```
-data_root/
-├── ers_tile_id_location_id.parquet    # location_id, lat, lon, tile_id
-├── split_1/
-│   ├── metrics_global_plot/           # per-variable map data
-│   │   ├── variable_a.parquet         # location_id, variable_a
-│   │   └── ...
-│   ├── additional_data/               # per-location attributes
-│   │   └── 0001.parquet               # location_id + attribute columns
-│   └── timeseries/
-│       └── 0001.parquet               # location_id, time, variable_A, ...
-└── split_2/
-    └── ...
-```
-
-## Preparing Your Data
+### Preparing Your Data
 
 The `prepare` module converts your raw data into the expected layout. This works in any project after installing the package:
 
@@ -112,29 +58,33 @@ out = prepare_dataviewer_data(
 print(out)   # path to the prepared data
 ```
 
-## Using the Viewer
-
-1. Choose a **Split** and **Variable** for the map.
-2. Click a point on the map, or type a **Location ID**, to select a location.
-3. The selected location shows its **timeseries**, a **table with all its variable values** from the map data, and its **additional data**.
-4. Use the **Plot Style** dropdown to change how the additional data is rendered (bar, scatter, table, histogram, box).
-
-## API Reference (brief)
+Point the app at a prepared data folder and launch it:
 
 ```python
-from dataviewer_joseph import DataConfig, DataIndex
+from dataviewer_joseph import create_app, DataConfig
 
-config = DataConfig(root="/path/to/data")          # customize column/folder names here
-index = DataIndex(config)                           # discovers splits & locations
-
-print(index.splits)                                  # available splits
+app = create_app(DataConfig(root="/path/to/my/data/dataviewer_auto"))
+app.show()
 ```
 
-Main data loaders (all take `config`, `split`, `location_id`):
+### Data Structure
 
-- `load_timeseries_for_location(...)` — timeseries rows
-- `load_map_data_for_location(...)` — all variable values from the map data
-- `load_additional_data_for_location(...)` — per-location attributes
+The app reads a root folder containing a lookup table and numbered `split_*` subfolders. All column and folder names are configurable; this is the default layout:
+
+```
+data_root/
+├── ers_tile_id_location_id.parquet    # location_id, lat, lon, tile_id
+├── split_1/
+│   ├── metrics_global_plot/           # per-variable map data
+│   │   ├── variable_a.parquet         # location_id, variable_a
+│   │   └── ...
+│   ├── additional_data/               # per-location attributes
+│   │   └── 0001.parquet               # location_id + attribute columns
+│   └── timeseries/
+│       └── 0001.parquet               # location_id, time, variable_A, ...
+└── split_2/
+    └── ...
+```
 
 ## Development
 

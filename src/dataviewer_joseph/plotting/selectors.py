@@ -3,7 +3,7 @@
 Provides a dropdown to select how additional data should be rendered.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import panel as pn
 import param

@@ -159,49 +159,49 @@ def load_timeseries_for_location(
     return None
 
 
-def load_feature_importance_for_location(
+def load_map_data_for_location(
     config: DataConfig,
     split: str,
     location_id: int,
-    tile_id: str | None = None,
-) -> dict | None:
-    """Load feature importance data for a specific location.
+) -> pd.Series | None:
+    """Load all map-data variable values for a specific location.
+
+    Reads each parquet file in the metrics subfolder (one file per variable)
+    and extracts the value for the given location.
 
     Args:
         config: DataConfig instance
         split: Split name
         location_id: Location ID to find
-        tile_id: Pre-computed tile ID (optional)
 
     Returns:
-        Dictionary with model names as keys, DataFrames as values, or None
+        pandas Series with variable names as index and values as data,
+        or None if no data found for the location
     """
-    fi_base = config.root / split / config.feature_importance_subfolder
-    if not fi_base.exists():
+    metrics_dir = config.root / split / config.metrics_subfolder
+    if not metrics_dir.exists():
         return None
 
-    # Look up tile_id if not provided
-    if tile_id is None:
+    var_files = sorted(metrics_dir.glob("*.parquet"))
+    if not var_files:
+        return None
+
+    values = {}
+    for var_file in var_files:
+        variable = var_file.stem
         try:
-            lookup = load_location_lookup(config)
-            loc_row = lookup[lookup[config.id_column] == location_id]
-            if loc_row.empty:
-                return None
-            tile_id = loc_row[config.tile_col].iloc[0]
-        except Exception:
-            return None
+            df = pd.read_parquet(var_file)
+            if config.id_column not in df.columns or variable not in df.columns:
+                continue
+            loc_rows = df[df[config.id_column] == location_id]
+            if loc_rows.empty:
+                continue
+            values[variable] = loc_rows.iloc[0][variable]
+        except Exception as e:
+            logger.warning(f"Error reading {var_file} for location {location_id}: {e}")
+            continue
 
-    # Load feature importance for both models
-    result = {}
-    for model_name in config.fi_model_subfolders:
-        tile_file = fi_base / model_name / f"{tile_id}.parquet"
-        if tile_file.exists():
-            fi_data = pd.read_parquet(tile_file)
-            fi_loc = fi_data[fi_data[config.id_column] == location_id]
-            if not fi_loc.empty:
-                result[model_name] = fi_loc.iloc[0]
-
-    return result if result else None
+    return pd.Series(values) if values else None
 
 
 def load_additional_data_for_location(
@@ -259,49 +259,6 @@ def load_additional_data_for_location(
         return None
 
 
-def load_metrics_from_tile(
-    config: DataConfig,
-    split: str,
-    tile_id: str,
-    location_id: int,
-) -> dict[str, dict[str, float]] | None:
-    """Load all metric values for a specific location from metrics_by_tile.
-
-    Args:
-        config: DataConfig instance
-        split: Split name
-        tile_id: Tile ID
-        location_id: Location ID to find
-
-    Returns:
-        Nested dictionary: {model_name: {metric: value}}, or None if not found
-    """
-    metrics_dir = config.root / split / config.metrics_by_tile_subfolder
-    tile_file = metrics_dir / f"{tile_id}.parquet"
-
-    if not tile_file.exists():
-        return None
-
-    df = pd.read_parquet(tile_file)
-    loc_row = df[df[config.id_column] == location_id]
-
-    if loc_row.empty:
-        return None
-
-    row = loc_row.iloc[0]
-    metrics = {}
-
-    for model_name, metric_cols in config.metric_models.items():
-        model_metrics = {}
-        for metric, (col_suffix, _) in metric_cols.items():
-            if col_suffix in row.index:
-                model_metrics[metric] = float(row[col_suffix])
-        if model_metrics:
-            metrics[model_name] = model_metrics
-
-    return metrics if metrics else None
-
-
 def get_timeseries_variables(config: DataConfig, split: str) -> list[str]:
     """Get list of numeric variable columns from timeseries files.
 
@@ -332,6 +289,7 @@ def generate_dummy_data(
     n_tiles: int = 4,
     splits: list[str] | None = None,
     variables: list[str] | None = None,
+    additional_variables: list[str] | None = None,
     seed: int = 42,
 ) -> DataConfig:
     """Generate dummy data for testing and development.
@@ -339,8 +297,7 @@ def generate_dummy_data(
     Creates a complete data structure matching the real dataviewer format:
     - lookup.parquet with location_id, lat, lon, tile_id
     - <split>/metrics_global_plot/<variable>.parquet
-    - <split>/metrics_by_tile/<tile>.parquet with 9 metric columns
-    - <split>/feature_importance/<model>/<tile>.parquet
+    - <split>/additional_data/<tile>.parquet with per-location attributes
     - <split>/timeseries/<tile>.parquet with time, location_id, backscatter40, lai, swvl1, predictions
 
     Args:
@@ -349,6 +306,8 @@ def generate_dummy_data(
         n_tiles: Number of tiles
         splits: List of split names (default: ["split_2020_2022", "split_2023_2024"])
         variables: Variable names for metrics_global_plot (default: ["rmse", "mae", "pearson"])
+        additional_variables: Attribute columns for additional_data
+            (default: ["elevation", "slope", "aspect", "green_cover"])
         seed: Random seed for reproducibility
 
     Returns:
@@ -364,6 +323,9 @@ def generate_dummy_data(
 
     if variables is None:
         variables = ["rmse", "mae", "pearson"]
+
+    if additional_variables is None:
+        additional_variables = ["elevation", "slope", "aspect", "green_cover"]
 
     # Generate locations
     location_ids = np.arange(n_locations)
@@ -402,61 +364,25 @@ def generate_dummy_data(
             )
             var_data.to_parquet(metrics_dir / f"{var}.parquet", index=False)
 
-        # Generate metrics_by_tile
-        metrics_by_tile_dir = split_dir / "metrics_by_tile"
-        metrics_by_tile_dir.mkdir(parents=True, exist_ok=True)
+        # Generate additional_data (one file per tile with per-location attributes)
+        additional_dir = split_dir / "additional_data"
+        additional_dir.mkdir(parents=True, exist_ok=True)
 
         for tile_id in tile_ids:
             tile_locations = location_ids[location_tile_ids == tile_id]
-            tile_data = pd.DataFrame(
-                {
-                    "location_id": tile_locations,
-                    "baseline_rmse": rng.normal(1.0, 0.2, len(tile_locations)),
-                    "baseline_mae": rng.normal(0.8, 0.2, len(tile_locations)),
-                    "baseline_pearson": rng.normal(0.7, 0.1, len(tile_locations)),
-                    "rf_depth5_n300_without_lagged_Core_Only_feat5_rmse": rng.normal(
-                        0.7, 0.15, len(tile_locations)
-                    ),
-                    "rf_depth5_n300_without_lagged_Core_Only_feat5_mae": rng.normal(
-                        0.6, 0.15, len(tile_locations)
-                    ),
-                    "rf_depth5_n300_without_lagged_Core_Only_feat5_pearson": rng.normal(
-                        0.8, 0.1, len(tile_locations)
-                    ),
-                    "rf_depth20_n300_with_lagged_Core_Short_Lags_feat17_rmse": rng.normal(
-                        0.6, 0.1, len(tile_locations)
-                    ),
-                    "rf_depth20_n300_with_lagged_Core_Short_Lags_feat17_mae": rng.normal(
-                        0.5, 0.1, len(tile_locations)
-                    ),
-                    "rf_depth20_n300_with_lagged_Core_Short_Lags_feat17_pearson": rng.normal(
-                        0.85, 0.08, len(tile_locations)
-                    ),
-                }
-            )
-            tile_data.to_parquet(
-                metrics_by_tile_dir / f"{tile_id}.parquet", index=False
-            )
-
-        # Generate feature_importance
-        fi_dir = split_dir / "feature_importance"
-        for model in ["without_lag", "with_lag"]:
-            model_dir = fi_dir / model
-            model_dir.mkdir(parents=True, exist_ok=True)
-
-            fi_cols = [f"fi_feature_{i}" for i in range(5)]
-            for tile_id in tile_ids:
-                tile_locations = location_ids[location_tile_ids == tile_id]
-                fi_data = pd.DataFrame(
-                    {
-                        "location_id": tile_locations,
-                        **{
-                            col: rng.uniform(0, 1, len(tile_locations))
-                            for col in fi_cols
-                        },
-                    }
-                )
-                fi_data.to_parquet(model_dir / f"{tile_id}.parquet", index=False)
+            add_data = pd.DataFrame({"location_id": tile_locations})
+            for col in additional_variables:
+                if col == "elevation":
+                    add_data[col] = rng.uniform(50, 2000, len(tile_locations))
+                elif col == "slope":
+                    add_data[col] = rng.uniform(0, 45, len(tile_locations))
+                elif col == "aspect":
+                    add_data[col] = rng.uniform(0, 360, len(tile_locations))
+                elif col == "green_cover":
+                    add_data[col] = rng.uniform(0, 100, len(tile_locations))
+                else:
+                    add_data[col] = rng.normal(0, 1, len(tile_locations))
+            add_data.to_parquet(additional_dir / f"{tile_id}.parquet", index=False)
 
         # Generate timeseries
         ts_dir = split_dir / "timeseries"

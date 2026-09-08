@@ -5,8 +5,7 @@ Features:
 - Split and variable selectors
 - Location ID input (or click on map)
 - Timeseries via plotting_joseph with var_specs editor
-- Feature importance bar charts (legacy)
-- Metrics comparison table (3x3 with RMSE, MAE, Pearson)
+- Map data table showing all variable values for the selected location
 - Additional data viewer with selectable renderer (bar, scatter, table, histogram, box)
 - Auto-discovery of splits, variables, and locations from parquet files
 """
@@ -14,33 +13,31 @@ Features:
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-import panel as pn
-import pandas as pd
-import numpy as np
-import holoviews as hv
 import geoviews as gv
+import holoviews as hv
+import numpy as np
+import pandas as pd
+import panel as pn
 
 from .config import DataConfig
 from .data import (
     DataIndex,
     find_splits,
-    get_variable_names,
-    load_location_coordinates,
-    load_variable_data,
-    load_location_lookup,
-    load_timeseries_for_location,
-    load_feature_importance_for_location,
-    load_additional_data_for_location,
-    load_metrics_from_tile,
     get_timeseries_variables,
+    get_variable_names,
+    load_additional_data_for_location,
+    load_location_coordinates,
+    load_location_lookup,
+    load_map_data_for_location,
+    load_timeseries_for_location,
+    load_variable_data,
 )
 from .plotting import (
-    plot_location_timeseries,
-    create_feature_importance_plot,
-    create_metrics_table,
     add_dynamic_sizing,
-    render_additional_data,
+    create_map_data_table,
     create_renderer_selector,
+    plot_location_timeseries,
+    render_additional_data,
 )
 from .var_spec_editor import VarSpecEditor
 
@@ -58,7 +55,7 @@ def create_app(config: DataConfig) -> pn.Column:
         config: DataConfig instance pointing to data root
 
     Returns:
-        Panel Column application with map, timeseries, metrics, and feature importance
+        Panel Column application with map, timeseries, map data table, and additional data
     """
     # Initialize data index
     index = DataIndex(config)
@@ -162,14 +159,7 @@ def create_app(config: DataConfig) -> pn.Column:
     )
     timeseries_pane.min_height = 400
 
-    feature_importance_pane = pn.Column(
-        sizing_mode="fixed",
-        width=800,
-        margin=0,
-        styles={"padding": "0"},
-    )
-
-    metrics_table_pane = pn.Column(
+    map_data_table_pane = pn.Column(
         sizing_mode="stretch_both",
         margin=0,
         styles={"padding": "0"},
@@ -205,7 +195,7 @@ def create_app(config: DataConfig) -> pn.Column:
         return var_data
 
     def load_and_display_location_data(location_id: int):
-        """Load and display timeseries, metrics, and feature importance for a location."""
+        """Load and display timeseries, map data table, and additional data for a location."""
         try:
             split_dir = split_select.value
             map_data = state.get("map_data")
@@ -227,7 +217,7 @@ def create_app(config: DataConfig) -> pn.Column:
                 pass
 
             if tile_id:
-                with ThreadPoolExecutor(max_workers=3) as executor:
+                with ThreadPoolExecutor(max_workers=2) as executor:
                     ts_future = executor.submit(
                         load_timeseries_for_location,
                         config,
@@ -235,24 +225,18 @@ def create_app(config: DataConfig) -> pn.Column:
                         location_id,
                         tile_id,
                     )
-                    fi_future = executor.submit(
-                        load_feature_importance_for_location,
+                    map_future = executor.submit(
+                        load_map_data_for_location,
                         config,
                         split_dir,
                         location_id,
-                        tile_id,
-                    )
-                    metrics_future = executor.submit(
-                        load_metrics_from_tile, config, split_dir, tile_id, location_id
                     )
 
                     ts_data = ts_future.result()
-                    fi_data = fi_future.result()
-                    metrics_data = metrics_future.result()
+                    map_data_for_location = map_future.result()
             else:
                 ts_data = None
-                fi_data = None
-                metrics_data = None
+                map_data_for_location = None
 
             if ts_data is not None and not ts_data.empty:
                 # Cache ts_data for config-driven replot
@@ -284,30 +268,16 @@ def create_app(config: DataConfig) -> pn.Column:
                     timeseries_pane.append(timeseries_plot)
                     state["last_plot_location_id"] = location_id
 
-                if metrics_data:
-                    metrics_table = create_metrics_table(
-                        metrics_data, config.metric_models
-                    )
-                    metrics_table_pane.clear()
-                    metrics_table_pane.append(metrics_table)
+                if map_data_for_location is not None and not map_data_for_location.empty:
+                    map_data_table = create_map_data_table(map_data_for_location)
+                    map_data_table_pane.clear()
+                    map_data_table_pane.append(map_data_table)
                 else:
-                    metrics_table_pane.clear()
-                    metrics_table_pane.append(
-                        pn.pane.Markdown("No metrics data available")
+                    map_data_table_pane.clear()
+                    map_data_table_pane.append(
+                        pn.pane.Markdown("No map data available for this location")
                     )
 
-                if fi_data:
-                    fi_plot = create_feature_importance_plot(
-                        fi_data, config.fi_col_prefix
-                    )
-                    feature_importance_pane.clear()
-                    feature_importance_pane.append(fi_plot)
-                else:
-                    feature_importance_pane.clear()
-                    feature_importance_pane.append(
-                        pn.pane.Markdown("Select a location to view feature importance")
-                    )
-                
                 # Load and render additional data
                 additional_data = load_additional_data_for_location(
                     config, split_dir, location_id, tile_id
@@ -328,13 +298,9 @@ def create_app(config: DataConfig) -> pn.Column:
                         f"**No timeseries data found for location {location_id}**"
                     )
                 )
-                metrics_table_pane.clear()
-                metrics_table_pane.append(
-                    pn.pane.Markdown("Select a location to view metrics")
-                )
-                feature_importance_pane.clear()
-                feature_importance_pane.append(
-                    pn.pane.Markdown("Select a location to view feature importance")
+                map_data_table_pane.clear()
+                map_data_table_pane.append(
+                    pn.pane.Markdown("Select a location to view map data")
                 )
                 additional_data_pane.clear()
                 additional_data_pane.append(
@@ -346,15 +312,11 @@ def create_app(config: DataConfig) -> pn.Column:
 
             logger.error(f"Error loading location data: {e}\n{traceback.format_exc()}")
             state["last_plot_location_id"] = None
-            error_msg = f"Error: {str(e)}"
+            error_msg = f"Error: {e!s}"
             timeseries_pane.clear()
             timeseries_pane.append(pn.pane.Markdown(f"**Error:** {error_msg}"))
-            metrics_table_pane.clear()
-            metrics_table_pane.append(pn.pane.Markdown("Error loading metrics"))
-            feature_importance_pane.clear()
-            feature_importance_pane.append(
-                pn.pane.Markdown("Error loading feature importance")
-            )
+            map_data_table_pane.clear()
+            map_data_table_pane.append(pn.pane.Markdown("Error loading map data"))
             additional_data_pane.clear()
             additional_data_pane.append(
                 pn.pane.Markdown("Error loading additional data")
@@ -389,7 +351,7 @@ def create_app(config: DataConfig) -> pn.Column:
             logger.warning(f"Error rendering additional data: {e}")
             additional_data_pane.clear()
             additional_data_pane.append(
-                pn.pane.Markdown(f"Error rendering: {str(e)}")
+                pn.pane.Markdown(f"Error rendering: {e!s}")
             )
 
     def regenerate_timeseries():
@@ -508,13 +470,9 @@ def create_app(config: DataConfig) -> pn.Column:
                         "**Click a location on the map to view timeseries**"
                     )
                 )
-                metrics_table_pane.clear()
-                metrics_table_pane.append(
-                    pn.pane.Markdown("Select a location to view metrics")
-                )
-                feature_importance_pane.clear()
-                feature_importance_pane.append(
-                    pn.pane.Markdown("Select a location to view feature importance")
+                map_data_table_pane.clear()
+                map_data_table_pane.append(
+                    pn.pane.Markdown("Select a location to view map data")
                 )
                 return
 
@@ -856,8 +814,7 @@ def create_app(config: DataConfig) -> pn.Column:
     # =============================================================================
 
     bottom_row = pn.Row(
-        metrics_table_pane,
-        feature_importance_pane,
+        map_data_table_pane,
         additional_data_pane,
         sizing_mode="fixed",
         height=420,
@@ -900,7 +857,7 @@ def create_app(config: DataConfig) -> pn.Column:
 
     return pn.Column(
         pn.pane.Markdown(
-            "# Backscatter Analysis Dataviewer",
+            "# Dataviewer",
             sizing_mode="stretch_width",
         ),
         pn.Row(

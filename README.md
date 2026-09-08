@@ -7,8 +7,7 @@ Interactive geospatial timeseries data viewer for Earth observation data with in
 - **Interactive Map**: GeoViews-based map with OSM basemap, clickable points, and highlight markers
 - **Timeseries Visualization**: Multi-panel timeseries via `plotting_joseph` with configurable `var_specs`
 - **Interactive var_specs Editor**: Configure timeseries plots without code - add variables, overlays, secondary axes, thresholds, seasons, correlations via Panel widgets
-- **Feature Importance**: Horizontal bar charts for ML model feature importance
-- **Metrics Table**: 3×3 comparison table (RMSE, MAE, Pearson) with best values starred
+- **Map Data Table**: All variable values for the selected location in a single table
 - **Additional Data Viewer**: Per-location attributes with selectable renderer (bar, scatter, table, histogram, box)
 - **Auto-Discovery**: Automatically discovers splits, variables, and locations from parquet files
 - **Data Preparation Tool**: CLI to prepare data from raw inputs into dataviewer-ready format
@@ -62,27 +61,21 @@ python scripts/run_app.py --data /path/to/data/dataviewer
 
 ## Data Structure
 
-The app expects data in the following structure:
+The app expects data in the following structure (all column/subfolder names are configurable):
 
 ```
 data_root/
 ├── ers_tile_id_location_id.parquet    # location_id, lat, lon, tile_id
 ├── split_1/
-│   ├── metrics_global_plot/
-│   │   ├── rmse.parquet               # location_id, rmse
-│   │   ├── mae.parquet                # location_id, mae
-│   │   └── pearson.parquet            # location_id, pearson
-│   ├── metrics_by_tile/
-│   │   ├── 0001.parquet               # location_id + 9 metric columns
+│   ├── metrics_global_plot/           # per-variable map data
+│   │   ├── variable_a.parquet         # location_id, variable_a
+│   │   ├── variable_b.parquet         # location_id, variable_b
 │   │   └── ...
-│   ├── feature_importance/
-│   │   ├── without_lag/
-│   │   │   ├── 0001.parquet           # location_id, fi_feature1, fi_feature2, ...
-│   │   │   └── ...
-│   │   └── with_lag/
-│   │       └── ...
+│   ├── additional_data/               # per-location attributes
+│   │   ├── 0001.parquet               # location_id + attribute columns
+│   │   └── ...
 │   └── timeseries/
-│       ├── 0001.parquet               # location_id, time, backscatter40, lai, swvl1, predictions
+│       ├── 0001.parquet               # location_id, time, variable_A, variable_B, ...
 │       └── ...
 └── split_2/
     └── ...
@@ -115,7 +108,7 @@ All folders should have matching split subfolder names (e.g., `split_1991_2015__
 
 The script creates `dataviewer_auto/` with:
 - Lookup table copied to root
-- Map data split into `metrics_global_plot/` (per variable) and `metrics_by_tile/` (per tile)
+- Map data split into `metrics_global_plot/` (one file per variable)
 - Timeseries copied to `timeseries/` (per tile)
 - Additional data copied to `additional_data/` (per tile)
 
@@ -199,9 +192,8 @@ from dataviewer_joseph import (
     find_splits,
     get_variable_names,
     load_timeseries_for_location,
-    load_feature_importance_for_location,
+    load_map_data_for_location,
     load_additional_data_for_location,
-    load_metrics_from_tile,
     get_timeseries_variables,
 )
 
@@ -216,6 +208,9 @@ ts_vars = get_timeseries_variables(config, "split_1")
 
 # Load timeseries for a location
 ts_data = load_timeseries_for_location(config, "split_1", location_id=123)
+
+# Load all map-data variable values for a location
+map_values = load_map_data_for_location(config, "split_1", location_id=123)
 ```
 
 ### var_specs Editor
@@ -241,8 +236,7 @@ var_specs = editor.to_var_specs()
 ```python
 from dataviewer_joseph.plotting import (
     plot_location_timeseries,
-    create_feature_importance_plot,
-    create_metrics_table,
+    create_map_data_table,
 )
 
 # Plot timeseries with var_specs
@@ -252,11 +246,8 @@ figs = plot_location_timeseries(
     var_specs=var_specs,
 )
 
-# Feature importance
-fi_plot = create_feature_importance_plot(fi_data)
-
-# Metrics table
-metrics_table = create_metrics_table(metrics)
+# Map data table (all variables for a location)
+map_table = create_map_data_table(map_values)
 ```
 
 ### Configuration
@@ -264,7 +255,7 @@ metrics_table = create_metrics_table(metrics)
 ```python
 from dataviewer_joseph import DataConfig
 
-# Default backscatter schema
+# Default schema
 config = DataConfig(root="/path/to/data")
 
 # Custom schema
@@ -274,17 +265,7 @@ config = DataConfig(
     lookup_file="ers_tile_id_location_id.parquet",
     metrics_subfolder="metrics_global_plot",
     timeseries_subfolder="timeseries",
-    feature_importance_subfolder="feature_importance",
-    metrics_by_tile_subfolder="metrics_by_tile",
-    # Custom metric models
-    metric_models={
-        "Baseline": {
-            "RMSE": ("baseline_rmse", "min"),
-            "MAE": ("baseline_mae", "min"),
-            "Pearson": ("baseline_pearson", "max"),
-        },
-        # ...
-    },
+    additional_data_subfolder="additional_data",
 )
 ```
 

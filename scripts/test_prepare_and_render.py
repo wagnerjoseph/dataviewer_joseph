@@ -67,9 +67,9 @@ def main():
         for split in ["split_2020_2022", "split_2023_2024"]:
             split_dir = map_data_dir / split
             split_dir.mkdir(parents=True)
-            
-            # Copy metrics_by_tile files as map_data
-            source_dir = dummy_root / split / "metrics_by_tile"
+
+            # Copy additional_data per-tile files as map_data
+            source_dir = additional_data_dir / split
             if source_dir.exists():
                 for tile_file in source_dir.glob("*.parquet"):
                     import shutil

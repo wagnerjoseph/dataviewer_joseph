@@ -7,13 +7,13 @@ from dataviewer_joseph.data import (
     DataIndex,
     find_splits,
     generate_dummy_data,
-    get_variable_names,
-    load_location_coordinates,
-    load_variable_data,
-    load_timeseries_for_location,
-    load_feature_importance_for_location,
-    load_metrics_from_tile,
     get_timeseries_variables,
+    get_variable_names,
+    load_additional_data_for_location,
+    load_location_coordinates,
+    load_map_data_for_location,
+    load_timeseries_for_location,
+    load_variable_data,
 )
 
 
@@ -105,38 +105,48 @@ class TestLoadTimeseries:
         assert ts_data is None
 
 
-class TestLoadFeatureImportance:
-    """Tests for load_feature_importance_for_location function."""
+class TestLoadMapDataForLocation:
+    """Tests for load_map_data_for_location function."""
 
-    def test_load_fi(self, data_config):
-        """Test loading feature importance."""
+    def test_load_map_data(self, data_config):
+        """Test loading all map variables for a location."""
         index = DataIndex(data_config)
         location_id = index.locations["location_id"].iloc[0]
 
-        fi_data = load_feature_importance_for_location(
+        values = load_map_data_for_location(
             data_config, "split_2020_2022", location_id
         )
 
-        assert fi_data is not None
-        assert "without_lag" in fi_data or "with_lag" in fi_data
+        assert values is not None
+        assert len(values) > 0
+        assert "rmse" in values.index
+
+    def test_load_nonexistent_location(self, data_config):
+        """Test loading map data for a location that doesn't exist."""
+        values = load_map_data_for_location(
+            data_config, "split_2020_2022", -99999
+        )
+        assert values is None or values.empty
 
 
-class TestLoadMetricsFromTile:
-    """Tests for load_metrics_from_tile function."""
+class TestLoadAdditionalData:
+    """Tests for load_additional_data_for_location function."""
 
-    def test_load_metrics(self, data_config):
-        """Test loading metrics from tile."""
+    def test_load_additional_data(self, data_config):
+        """Test loading additional data for a location."""
         index = DataIndex(data_config)
         location_id = index.locations["location_id"].iloc[0]
         tile_id = index.locations["tile_id"].iloc[0]
 
-        metrics = load_metrics_from_tile(
-            data_config, "split_2020_2022", str(tile_id).zfill(4), location_id
+        attrs = load_additional_data_for_location(
+            data_config,
+            "split_2020_2022",
+            location_id,
+            tile_id,
         )
 
-        # May be None if tile_id format doesn't match
-        if metrics is not None:
-            assert len(metrics) > 0
+        assert attrs is not None
+        assert len(attrs) > 0
 
 
 class TestGetTimeseriesVariables:
@@ -170,8 +180,7 @@ class TestGenerateDummyData:
         for split in ["split_2020_2022", "split_2023_2024"]:
             split_dir = tmp_path / split
             assert (split_dir / "metrics_global_plot").exists()
-            assert (split_dir / "metrics_by_tile").exists()
-            assert (split_dir / "feature_importance").exists()
+            assert (split_dir / "additional_data").exists()
             assert (split_dir / "timeseries").exists()
 
     def test_generate_reproducible(self, tmp_path):

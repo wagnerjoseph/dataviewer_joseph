@@ -4,10 +4,10 @@ import logging
 import time
 from typing import Any
 
-import numpy as np
-import pandas as pd
 import geoviews as gv
 import holoviews as hv
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 Prepares data from raw input folders into the dataviewer_auto/ structure:
 - Lookup table: copied as-is
-- Map data (no time): split into metrics_global_plot (per-variable) + metrics_by_tile (per-tile)
+- Map data (no time): split into metrics_global_plot (per-variable)
 - Timeseries (has time): copied per-tile
 - Additional data (per-location attributes): copied per-tile
 """
@@ -10,7 +10,6 @@ Prepares data from raw input folders into the dataviewer_auto/ structure:
 import logging
 import shutil
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -96,31 +95,28 @@ def process_map_data(
     split_dir: Path,
     output_split_dir: Path,
     id_column: str = "location_id",
-    exclude_columns: Optional[list[str]] = None,
+    exclude_columns: list[str] | None = None,
 ) -> dict[str, int]:
     """Process map data (no time column) for one split.
     
     Creates:
     - metrics_global_plot/<variable>.parquet (one file per variable)
-    - metrics_by_tile/<tile_id>.parquet (copy of original tile files)
-    
+
     Args:
         split_dir: Input split directory with tile parquet files
         output_split_dir: Output split directory
         id_column: Location identifier column name
         exclude_columns: Columns to exclude from metrics_global_plot
-        
+
     Returns:
         Dict mapping variable names to number of locations processed
     """
     if exclude_columns is None:
         exclude_columns = ["tile_id", "lat", "lon"]
-    
+
     metrics_global_dir = output_split_dir / "metrics_global_plot"
-    metrics_by_tile_dir = output_split_dir / "metrics_by_tile"
-    
+
     metrics_global_dir.mkdir(parents=True, exist_ok=True)
-    metrics_by_tile_dir.mkdir(parents=True, exist_ok=True)
     
     # Get all tile files
     tile_files = sorted(split_dir.glob("*.parquet"))
@@ -177,13 +173,7 @@ def process_map_data(
             combined.to_parquet(output_file, compression=None, index=False)
             results[var_name] = len(combined)
             logger.debug(f"  Created {var_name}.parquet with {len(combined)} locations")
-    
-    # Copy tile files to metrics_by_tile (as-is, no compression)
-    for tile_file in tile_files:
-        tile_id = tile_file.stem
-        output_file = metrics_by_tile_dir / f"{tile_id}.parquet"
-        shutil.copy2(tile_file, output_file)
-    
+
     logger.info(f"Processed map data for split {output_split_dir.name}: {len(results)} variables")
     return results
 
@@ -315,10 +305,10 @@ def prepare_dataviewer_data(
     map_data_dir: Path,
     timeseries_dir: Path,
     output_dir: Path,
-    additional_data_dir: Optional[Path] = None,
+    additional_data_dir: Path | None = None,
     output_name: str = "dataviewer_auto",
     id_column: str = "location_id",
-    exclude_columns: Optional[list[str]] = None,
+    exclude_columns: list[str] | None = None,
 ) -> Path:
     """Prepare data for dataviewer_joseph.
     
@@ -339,7 +329,7 @@ def prepare_dataviewer_data(
         ValueError: If no common splits found or required directories missing
     """
     output_path = output_dir / output_name
-    logger.info(f"Preparing dataviewer data...")
+    logger.info("Preparing dataviewer data...")
     logger.info(f"  Lookup: {lookup_dir}")
     logger.info(f"  Map data: {map_data_dir}")
     logger.info(f"  Timeseries: {timeseries_dir}")

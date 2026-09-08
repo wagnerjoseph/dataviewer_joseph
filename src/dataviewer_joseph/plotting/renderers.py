@@ -11,7 +11,8 @@ Each renderer takes attribute data and returns a Panel/HoloViews object.
 """
 
 import logging
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import holoviews as hv
 import numpy as np

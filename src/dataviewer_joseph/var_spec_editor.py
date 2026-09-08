@@ -10,7 +10,7 @@ Features:
 - Stable IDs for correct removal (no stale identity bugs)
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import panel as pn
 import param

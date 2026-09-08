@@ -15,15 +15,18 @@ Interactive geospatial timeseries data viewer for Earth observation data with in
 
 ## Installation
 
+Install the package directly from GitHub (no need to clone the repository):
+
 ```bash
-# Clone the repository
+pip install git+https://github.com/wagnerjoseph/dataviewer_joseph.git
+```
+
+For development (editable install with the repo cloned locally):
+
+```bash
 git clone https://github.com/wagnerjoseph/dataviewer_joseph.git
 cd dataviewer_joseph
-
-# Set up virtual environment with uv
 uv sync
-
-# Install in development mode
 uv pip install -e .
 ```
 
@@ -39,11 +42,13 @@ from dataviewer_joseph import generate_dummy_data, create_app, DataConfig
 data_root = Path("/tmp/test_data")
 generate_dummy_data(data_root, n_locations=100, n_tiles=4)
 
-# Create and launch the app
+# Create and launch the app in your browser
 config = DataConfig(root=data_root)
 app = create_app(config)
-app.servable()
+app.show()   # opens the viewer in a new browser tab
 ```
+
+`app.show()` starts a local server and opens the viewer in your default browser. (`.servable()` is only for embedding in Jupyter notebooks and does not launch a standalone viewer.)
 
 ### Running the App
 

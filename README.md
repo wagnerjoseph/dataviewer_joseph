@@ -96,6 +96,8 @@ For contributors working on the source repository.
 # Clone and set up
 git clone https://github.com/wagnerjoseph/dataviewer_joseph.git
 cd dataviewer_joseph
+
+# plotting_joseph is pulled from git (not PyPI), so uv sync resolves it automatically.
 uv sync
 uv pip install -e .
 ```

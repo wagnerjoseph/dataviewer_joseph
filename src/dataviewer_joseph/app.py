@@ -261,6 +261,7 @@ def create_app(config: DataConfig) -> pn.Column:
                     figsize=(10, 5),
                     font_scale=1.0,
                     show_plot=False,
+                    master_lookup=str(config.lookup_path),
                 )
 
                 if figs and len(figs) > 0:
@@ -382,6 +383,7 @@ def create_app(config: DataConfig) -> pn.Column:
             figsize=(10, 5),
             font_scale=1.0,
             show_plot=False,
+            master_lookup=str(config.lookup_path),
         )
 
         if figs and len(figs) > 0:
@@ -850,15 +852,72 @@ def create_app(config: DataConfig) -> pn.Column:
         },
     )
 
-    # Collapsible var_spec editor panel
-    var_spec_accordion = pn.Accordion(
-        ("Timeseries Configuration", var_spec_pane),
-        active=[],
+    # Collapsible floating var_spec editor panel (overlays the map)
+    config_panel = pn.Column(
+        var_spec_pane,
+        sizing_mode="stretch_width",
+        visible=False,
+        styles={
+            "position": "absolute",
+            "top": "40px",
+            "right": "10px",
+            "left": "10px",
+            "max-height": "72vh",
+            "overflow-y": "auto",
+            "overflow-x": "auto",
+            "z-index": "100",
+            "background": "white",
+            "border": "1px solid #ddd",
+            "border-radius": "5px",
+            "box-shadow": "0 2px 10px rgba(0,0,0,0.15)",
+        },
     )
+
+    config_toggle = pn.widgets.Button(
+        icon="cog",
+        label="Config",
+        button_type="default",
+        styles={
+            "position": "absolute",
+            "top": "5px",
+            "right": "10px",
+            "z-index": "200",
+        },
+    )
+
+    def toggle_config(event):
+        config_panel.visible = not config_panel.visible
+
+    config_toggle.on_click(toggle_config)
 
     controls = [variable_select, location_input, loading_indicator]
     if not single_split:
         controls.insert(0, split_select)
+
+    map_with_config = pn.Row(
+        map_pane,
+        config_panel,
+        config_toggle,
+        sizing_mode="fixed",
+        styles={
+            "position": "relative",
+            "width": "50vw",
+            "height": "75vh",
+            "min-width": "50vw",
+            "max-width": "50vw",
+        },
+    )
+
+    main_layout = pn.Row(
+        map_with_config,
+        right_column,
+        sizing_mode="fixed",
+        styles={
+            "width": "100vw",
+            "margin": "0",
+            "padding": "0",
+        },
+    )
 
     return pn.Column(
         pn.pane.Markdown(
@@ -875,7 +934,6 @@ def create_app(config: DataConfig) -> pn.Column:
             sizing_mode="fixed",
             height=80,
         ),
-        var_spec_accordion,
         main_layout,
         sizing_mode="stretch_width",
         styles={"margin": "0", "padding": "0"},

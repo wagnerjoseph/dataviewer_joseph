@@ -238,7 +238,6 @@ class TestVarSpecEditor:
         primary_keys = set(specs[0].keys())
         expected_primary = {
             "name", "label", "color", "line_width", "alpha", "plotstyle",
-            "show_seasons", "interpolate",
         }
         assert primary_keys == expected_primary
 

@@ -37,7 +37,7 @@ dependencies = [
     "holoviews>=1.17",
     "geoviews>=1.10",
     "bokeh>=3.3",
-    "plotting-joseph",
+    "plotting_joseph[all] @ git+https://github.com/wagnerjoseph/plotting_joseph.git",
 ]
 
 [project.urls]

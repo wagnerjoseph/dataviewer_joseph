@@ -105,30 +105,37 @@ class VarSpecEditor(param.Parameterized):
             "name": pn.widgets.Select(
                 options=self.available_variables,
                 value=name if name in self.available_variables else (self.available_variables[0] if self.available_variables else None),
+                width=200,
             ),
-            "color": pn.widgets.ColorPicker(value=color_default),
-            "label": pn.widgets.TextInput(value=label_default),
+            "color": pn.widgets.ColorPicker(value=color_default, width=60),
+            "label": pn.widgets.TextInput(value=label_default, width=200),
             "line_width": pn.widgets.FloatSlider(start=0.5, end=5, step=0.5, value=1.5),
             "alpha": pn.widgets.FloatSlider(start=0.1, end=1.0, step=0.1, value=1.0),
             "plotstyle": pn.widgets.Select(options=["line", "points", "both"], value="line"),
-            "show_seasons": pn.widgets.Checkbox(value=False),
-            "interpolate": pn.widgets.Checkbox(value=False),
             "lower_threshold_val": pn.widgets.FloatInput(value=None),
             "lower_threshold_color": pn.widgets.ColorPicker(value="#ff0000"),
             "upper_threshold_val": pn.widgets.FloatInput(value=None),
             "upper_threshold_color": pn.widgets.ColorPicker(value="#0000ff"),
-            "apply_shading_to_all": pn.widgets.Checkbox(value=False),
         }
 
         if is_overlay:
-            widgets["add_second_axis"] = pn.widgets.Checkbox(value=False)
-            widgets["align_zero"] = pn.widgets.Checkbox(value=False)
-            widgets["compute_corr"] = pn.widgets.Checkbox(value=False)
+            widgets["add_second_axis"] = pn.widgets.Checkbox(name="2nd axis", value=False)
+            widgets["align_zero"] = pn.widgets.Checkbox(name="Align zero", value=False)
+            widgets["compute_corr"] = pn.widgets.Checkbox(name="Correlation", value=False)
             widgets["remove_btn"] = pn.widgets.Button(label="Remove", color="danger", width=80)
 
         for key, widget in widgets.items():
             if hasattr(widget, "param") and hasattr(widget.param, "value"):
                 widget.param.watch(self._on_widget_change, "value")
+
+        # Keep the legend label in sync with the selected variable so the legend
+        # updates when the variable dropdown is changed.
+        def on_name_change(event, label_widget=widgets["label"]):
+            new_name = event.new
+            if new_name:
+                label_widget.value = new_name.replace("_", " ").title()
+
+        widgets["name"].param.watch(on_name_change, "value")
 
         return widgets
 
@@ -162,13 +169,11 @@ class VarSpecEditor(param.Parameterized):
                 pn.Column(
                     pn.Row(
                         pn.Column(widgets["line_width"], widgets["alpha"], width=200),
-                        pn.Column(widgets["show_seasons"], widgets["interpolate"], width=200),
                         pn.Column(widgets["plotstyle"], width=200),
                     ),
                     pn.Row(
                         pn.Column(widgets["lower_threshold_val"], widgets["lower_threshold_color"], width=200),
                         pn.Column(widgets["upper_threshold_val"], widgets["upper_threshold_color"], width=200),
-                        widgets["apply_shading_to_all"],
                     ),
                     sizing_mode="stretch_width",
                 ),
@@ -185,22 +190,29 @@ class VarSpecEditor(param.Parameterized):
 
             primary = sp["primary"]
             primary_row = pn.Row(
-                pn.Column(primary["name"], width=250),
-                pn.Column(primary["color"], width=100),
-                pn.Column(primary["label"], width=200),
+                pn.Column(primary["name"], width=210),
+                pn.Column(primary["color"], width=80),
+                pn.Column(primary["label"], width=210),
                 margin=(5, 5, 0, 5),
+                scroll=True,
             )
             primary_advanced = self._create_advanced_accordion(primary)
 
             overlay_rows = []
             for ov_idx, ov in enumerate(sp["overlays"]):
                 ov_row = pn.Row(
-                    pn.Column(ov["name"], width=250),
-                    pn.Column(ov["color"], width=100),
-                    pn.Column(ov["label"], width=200),
-                    pn.Column(ov["add_second_axis"], ov["align_zero"], width=200),
+                    pn.Column(ov["name"], width=210),
+                    pn.Column(ov["color"], width=80),
+                    pn.Column(ov["label"], width=210),
+                    pn.Column(
+                        ov["add_second_axis"],
+                        ov["align_zero"],
+                        ov["compute_corr"],
+                        width=180,
+                    ),
                     ov["remove_btn"],
                     margin=(5, 5, 0, 5),
+                    scroll=True,
                 )
                 ov_advanced = self._create_advanced_accordion(ov)
                 overlay_rows.append(pn.Column(ov_row, ov_advanced, sizing_mode="stretch_width"))
@@ -322,8 +334,6 @@ class VarSpecEditor(param.Parameterized):
                 "line_width": primary["line_width"].value,
                 "alpha": primary["alpha"].value,
                 "plotstyle": primary["plotstyle"].value,
-                "show_seasons": primary["show_seasons"].value,
-                "interpolate": primary["interpolate"].value,
             }
 
             lower_val = primary["lower_threshold_val"].value
@@ -333,9 +343,6 @@ class VarSpecEditor(param.Parameterized):
             upper_val = primary["upper_threshold_val"].value
             if upper_val is not None:
                 primary_spec["upper_treshold"] = (upper_val, primary["upper_threshold_color"].value)
-
-            if primary["apply_shading_to_all"].value:
-                primary_spec["apply_shading_to_all"] = True
 
             specs.append(primary_spec)
 
@@ -351,8 +358,6 @@ class VarSpecEditor(param.Parameterized):
                     "line_width": ov["line_width"].value,
                     "alpha": ov["alpha"].value,
                     "plotstyle": ov["plotstyle"].value,
-                    "show_seasons": ov["show_seasons"].value,
-                    "interpolate": ov["interpolate"].value,
                     "add_to": primary_name,
                 }
 
@@ -370,9 +375,6 @@ class VarSpecEditor(param.Parameterized):
                 upper_val = ov["upper_threshold_val"].value
                 if upper_val is not None:
                     ov_spec["upper_treshold"] = (upper_val, ov["upper_threshold_color"].value)
-
-                if ov["apply_shading_to_all"].value:
-                    ov_spec["apply_shading_to_all"] = True
 
                 specs.append(ov_spec)
 

@@ -4,6 +4,8 @@
 import argparse
 from pathlib import Path
 
+import panel as pn
+
 from dataviewer_joseph import DataConfig, create_app, generate_dummy_data
 
 
@@ -51,12 +53,9 @@ def main() -> None:
     print(f"Data directory: {data_path}")
     app = create_app(config)
 
-    # Serve the app
-    if args.show:
-        app.show()
-    else:
-        app.servable()
-        print(f"App served at http://localhost:{args.port}")
+    # Serve the app (blocks until the server is stopped)
+    print(f"App served at http://localhost:{args.port}")
+    pn.serve(app, port=args.port, show=args.show)
 
 
 if __name__ == "__main__":

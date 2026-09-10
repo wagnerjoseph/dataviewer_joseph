@@ -1792,7 +1792,7 @@ wheels = [
 [[package]]
 name = "plotting-joseph"
 version = "0.1.0"
-source = { git = "https://github.com/wagnerjoseph/plotting_joseph.git#7a75d46cd9310b4ec9663ebce83021fed365e3fc" }
+source = { git = "https://github.com/wagnerjoseph/plotting_joseph.git#002733fa4e4695c5f4486a5dfa24e5903c761077" }
 dependencies = [
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },

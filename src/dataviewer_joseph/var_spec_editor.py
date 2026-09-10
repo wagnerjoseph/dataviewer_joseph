@@ -112,10 +112,19 @@ class VarSpecEditor(param.Parameterized):
             "line_width": pn.widgets.FloatSlider(start=0.5, end=5, step=0.5, value=1.5),
             "alpha": pn.widgets.FloatSlider(start=0.1, end=1.0, step=0.1, value=1.0),
             "plotstyle": pn.widgets.Select(options=["line", "points", "both"], value="line"),
+            "threshold_mode": pn.widgets.RadioButtonGroup(
+                options=["Value", "Percentile"],
+                value="Value",
+                button_type="primary",
+            ),
             "lower_threshold_val": pn.widgets.FloatInput(value=None),
             "lower_threshold_color": pn.widgets.ColorPicker(value="#ff0000"),
             "upper_threshold_val": pn.widgets.FloatInput(value=None),
             "upper_threshold_color": pn.widgets.ColorPicker(value="#0000ff"),
+            "lower_percentile": pn.widgets.FloatInput(value=None, step=1),
+            "lower_percentile_color": pn.widgets.ColorPicker(value="#ff0000"),
+            "upper_percentile": pn.widgets.FloatInput(value=None, step=1),
+            "upper_percentile_color": pn.widgets.ColorPicker(value="#0000ff"),
         }
 
         if is_overlay:
@@ -163,18 +172,39 @@ class VarSpecEditor(param.Parameterized):
 
     def _create_advanced_accordion(self, widgets: dict) -> pn.Accordion:
         """Create collapsed accordion with advanced options."""
+
+        def column(*items, width=200):
+            return pn.Column(*items, width=width)
+
+        value_row = pn.Row(
+            column(widgets["lower_threshold_val"], widgets["lower_threshold_color"]),
+            column(widgets["upper_threshold_val"], widgets["upper_threshold_color"]),
+        )
+        percentile_row = pn.Row(
+            column(widgets["lower_percentile"], widgets["lower_percentile_color"]),
+            column(widgets["upper_percentile"], widgets["upper_percentile_color"]),
+        )
+
+        def on_threshold_mode_change(event):
+            is_percentile = event.new == "Percentile"
+            value_row.visible = not is_percentile
+            percentile_row.visible = is_percentile
+
+        widgets["threshold_mode"].param.watch(on_threshold_mode_change, "value")
+        value_row.visible = True
+        percentile_row.visible = False
+
         return pn.Accordion(
             (
                 "Advanced",
                 pn.Column(
                     pn.Row(
-                        pn.Column(widgets["line_width"], widgets["alpha"], width=200),
-                        pn.Column(widgets["plotstyle"], width=200),
+                        column(widgets["line_width"], widgets["alpha"], width=200),
+                        column(widgets["plotstyle"], width=200),
                     ),
-                    pn.Row(
-                        pn.Column(widgets["lower_threshold_val"], widgets["lower_threshold_color"], width=200),
-                        pn.Column(widgets["upper_threshold_val"], widgets["upper_threshold_color"], width=200),
-                    ),
+                    pn.Row(widgets["threshold_mode"], margin=(5, 5)),
+                    value_row,
+                    percentile_row,
                     sizing_mode="stretch_width",
                 ),
             ),
@@ -336,13 +366,25 @@ class VarSpecEditor(param.Parameterized):
                 "plotstyle": primary["plotstyle"].value,
             }
 
-            lower_val = primary["lower_threshold_val"].value
-            if lower_val is not None:
-                primary_spec["lower_treshold"] = (lower_val, primary["lower_threshold_color"].value)
+            if primary["threshold_mode"].value == "Percentile":
+                lower_p = primary["lower_percentile"].value
+                if lower_p is not None:
+                    primary_spec["lower_percentile"] = (
+                        lower_p, primary["lower_percentile_color"].value)
+                upper_p = primary["upper_percentile"].value
+                if upper_p is not None:
+                    primary_spec["upper_percentile"] = (
+                        upper_p, primary["upper_percentile_color"].value)
+            else:
+                lower_val = primary["lower_threshold_val"].value
+                if lower_val is not None:
+                    primary_spec["lower_treshold"] = (
+                        lower_val, primary["lower_threshold_color"].value)
 
-            upper_val = primary["upper_threshold_val"].value
-            if upper_val is not None:
-                primary_spec["upper_treshold"] = (upper_val, primary["upper_threshold_color"].value)
+                upper_val = primary["upper_threshold_val"].value
+                if upper_val is not None:
+                    primary_spec["upper_treshold"] = (
+                        upper_val, primary["upper_threshold_color"].value)
 
             specs.append(primary_spec)
 
@@ -368,13 +410,25 @@ class VarSpecEditor(param.Parameterized):
                 if ov["compute_corr"].value:
                     ov_spec["compute_corr"] = True
 
-                lower_val = ov["lower_threshold_val"].value
-                if lower_val is not None:
-                    ov_spec["lower_treshold"] = (lower_val, ov["lower_threshold_color"].value)
+                if ov["threshold_mode"].value == "Percentile":
+                    lower_p = ov["lower_percentile"].value
+                    if lower_p is not None:
+                        ov_spec["lower_percentile"] = (
+                            lower_p, ov["lower_percentile_color"].value)
+                    upper_p = ov["upper_percentile"].value
+                    if upper_p is not None:
+                        ov_spec["upper_percentile"] = (
+                            upper_p, ov["upper_percentile_color"].value)
+                else:
+                    lower_val = ov["lower_threshold_val"].value
+                    if lower_val is not None:
+                        ov_spec["lower_treshold"] = (
+                            lower_val, ov["lower_threshold_color"].value)
 
-                upper_val = ov["upper_threshold_val"].value
-                if upper_val is not None:
-                    ov_spec["upper_treshold"] = (upper_val, ov["upper_threshold_color"].value)
+                    upper_val = ov["upper_threshold_val"].value
+                    if upper_val is not None:
+                        ov_spec["upper_treshold"] = (
+                            upper_val, ov["upper_threshold_color"].value)
 
                 specs.append(ov_spec)
 

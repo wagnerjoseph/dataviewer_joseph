@@ -18,6 +18,7 @@ import holoviews as hv
 import numpy as np
 import pandas as pd
 import panel as pn
+from cmcrameri import cm as crameri_cm
 
 from .config import DataConfig
 from .data import (
@@ -46,6 +47,19 @@ logger = logging.getLogger(__name__)
 pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
+
+# Curated Fabio Crameri scientific colormaps for the map, grouped by gradient type.
+CRAMERI_CMAPS = {
+    "Sequential": ["batlow", "oslo", "lajolla", "bilbao"],
+    "Diverging": ["vik", "broc", "cork", "roma"],
+}
+DEFAULT_GRADIENT = "Sequential"
+DEFAULT_CMAP = "batlow"
+
+
+def _cmap_object(name: str):
+    """Resolve a Crameri colormap name to its matplotlib colormap object."""
+    return crameri_cm.cmaps[name]
 
 
 def create_app(config: DataConfig) -> pn.Column:
@@ -118,6 +132,17 @@ def create_app(config: DataConfig) -> pn.Column:
         name="Location ID",
         value=None,
         step=1,
+    )
+
+    gradient_select = pn.widgets.Select(
+        name="Gradient",
+        options=list(CRAMERI_CMAPS.keys()),
+        value=DEFAULT_GRADIENT,
+    )
+    cmap_select = pn.widgets.Select(
+        name="Colormap",
+        options=CRAMERI_CMAPS[DEFAULT_GRADIENT],
+        value=DEFAULT_CMAP,
     )
 
     loading_indicator = pn.indicators.LoadingSpinner(
@@ -457,6 +482,16 @@ def create_app(config: DataConfig) -> pn.Column:
             return (None, None)
         return (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
 
+    def _gradient_cmap_and_clim(vmin, vmax):
+        """Return the effective colormap and color limits for the selected gradient type."""
+        cmap = _cmap_object(cmap_select.value)
+        if gradient_select.value == "Sequential":
+            return cmap.reversed(), (vmin, vmax)
+        if vmin is None or vmax is None:
+            return cmap, (None, None)
+        max_abs = max(abs(vmin), abs(vmax))
+        return cmap, (-max_abs, max_abs)
+
     def create_on_selection_update():
         """Create a shared selection update callback."""
 
@@ -518,6 +553,7 @@ def create_app(config: DataConfig) -> pn.Column:
 
             # Compute color limits
             vmin, vmax = _auto_clim(map_data[variable_name].values)
+            cmap, clim = _gradient_cmap_and_clim(vmin, vmax)
 
             # Create points layer
             points = gv.Points(
@@ -526,14 +562,14 @@ def create_app(config: DataConfig) -> pn.Column:
                 vdims=[config.id_column, variable_name],
             ).opts(
                 color=variable_name,
-                cmap="viridis",
+                cmap=cmap,
                 size=2,
                 width=800,
                 height=700,
                 responsive=True,
                 tools=["tap", "hover", "box_zoom", "wheel_zoom", "reset"],
                 colorbar=True,
-                clim=(vmin, vmax),
+                clim=clim,
                 title=f"{variable_name} - {split_dir}",
                 active_tools=["wheel_zoom"],
                 hooks=[add_dynamic_sizing],
@@ -630,6 +666,7 @@ def create_app(config: DataConfig) -> pn.Column:
 
             # Compute new color limits
             vmin, vmax = _auto_clim(map_data[variable_name].values)
+            cmap, clim = _gradient_cmap_and_clim(vmin, vmax)
 
             # Create new points element
             points = gv.Points(
@@ -638,14 +675,14 @@ def create_app(config: DataConfig) -> pn.Column:
                 vdims=[config.id_column, variable_name],
             ).opts(
                 color=variable_name,
-                cmap="viridis",
+                cmap=cmap,
                 size=2,
                 width=800,
                 height=700,
                 responsive=True,
                 tools=["tap", "hover", "box_zoom", "wheel_zoom", "reset"],
                 colorbar=True,
-                clim=(vmin, vmax),
+                clim=clim,
                 title=f"{variable_name} - {split_dir}",
                 active_tools=["wheel_zoom"],
                 hooks=[add_dynamic_sizing],
@@ -748,6 +785,20 @@ def create_app(config: DataConfig) -> pn.Column:
         if split_dir and variable_name:
             update_map_data(split_dir, variable_name)
 
+    def on_gradient_change(event):
+        """Repopulate colormap options when the gradient type changes."""
+        gradient_type = event.new
+        options = CRAMERI_CMAPS[gradient_type]
+        cmap_select.options = options
+        cmap_select.value = options[0]
+
+    def on_cmap_change(event):
+        """Re-render the map when the colormap changes."""
+        split_dir = split_select.value
+        variable_name = variable_select.value
+        if split_dir and variable_name:
+            update_map_data(split_dir, variable_name)
+
     def on_location_input_change(event):
         """Handle manual location ID input."""
         if state.get("updating_location_input", False):
@@ -780,6 +831,8 @@ def create_app(config: DataConfig) -> pn.Column:
     split_select.param.watch(on_split_change, "value")
     variable_select.param.watch(on_variable_change, "value")
     location_input.param.watch(on_location_input_change, "value")
+    gradient_select.param.watch(on_gradient_change, "value")
+    cmap_select.param.watch(on_cmap_change, "value")
 
     # =============================================================================
     # VAR SPEC EDITOR
@@ -890,7 +943,7 @@ def create_app(config: DataConfig) -> pn.Column:
 
     config_toggle.on_click(toggle_config)
 
-    controls = [variable_select, location_input, loading_indicator]
+    controls = [variable_select, location_input, gradient_select, cmap_select, loading_indicator]
     if not single_split:
         controls.insert(0, split_select)
 

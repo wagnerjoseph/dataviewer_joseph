@@ -10,10 +10,14 @@ Features:
 - Auto-discovery of splits, variables, and locations from parquet files
 """
 
+from io import BytesIO
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import geoviews as gv
+from plotting_joseph import plot_map
 import holoviews as hv
 import numpy as np
 import pandas as pd
@@ -47,6 +51,214 @@ logger = logging.getLogger(__name__)
 pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
+
+
+def _web_mercator_to_latlon(x: float, y: float) -> tuple[float, float]:
+    """Convert Web Mercator (meters) to lat/lon (degrees)."""
+    R = 6378137  # Earth radius in meters
+    lon = (x / R) * (180 / math.pi)
+    lat = (math.atan(math.exp(y / R)) * (360 / math.pi)) - 90
+    return lat, lon
+
+
+def _trigger_browser_download(data: bytes, filename: str):
+    """Prepare file download for FileDownload widget."""
+    return data, filename
+
+
+class DownloadHandler:
+    """Handler for map and timeseries downloads."""
+
+    def __init__(
+        self,
+        state: dict,
+        split_select: pn.widgets.Select,
+        variable_select: pn.widgets.Select,
+        cmap_select: pn.widgets.Select,
+        gradient_select: pn.widgets.Select,
+        config: DataConfig,
+        error_pane: pn.pane.Alert,
+        loading_indicator: pn.indicators.LoadingSpinner,
+        download_map_button: pn.widgets.FileDownload,
+        download_timeseries_button: pn.widgets.FileDownload,
+        map_pane: pn.pane.HoloViews,
+    ):
+        self.state = state
+        self.split_select = split_select
+        self.variable_select = variable_select
+        self.cmap_select = cmap_select
+        self.gradient_select = gradient_select
+        self.config = config
+        self.error_pane = error_pane
+        self.loading_indicator = loading_indicator
+        self.download_map_button = download_map_button
+        self.download_timeseries_button = download_timeseries_button
+        self.map_pane = map_pane
+
+        # Set up callbacks for FileDownload widgets
+        self.download_map_button.callback = self._generate_map_download
+        self.download_timeseries_button.callback = self._generate_timeseries_download
+
+    def _show_error(self, message: str):
+        """Display an error message."""
+        self.error_pane.object = f"**Error:** {message}"
+        self.error_pane.visible = True
+
+    def _read_live_extent(self) -> tuple[float, float, float, float] | None:
+        """Read the current zoom extent directly from the live rendered map.
+
+        Returns ``(lon_min, lon_max, lat_min, lat_max)`` from the current
+        Web Mercator ranges (no clamping).
+        """
+        try:
+            if hasattr(self.map_pane, "_plots") and self.map_pane._plots:
+                plot = list(self.map_pane._plots.values())[0]
+                if isinstance(plot, (list, tuple)):
+                    plot = plot[0]
+                if hasattr(plot, "state"):
+                    s = plot.state
+                    x_start = s.x_range.start
+                    x_end = s.x_range.end
+                    y_start = s.y_range.start
+                    y_end = s.y_range.end
+                    if None in (x_start, x_end, y_start, y_end):
+                        return None
+                    lat_min, lon_min = _web_mercator_to_latlon(x_start, y_start)
+                    lat_max, lon_max = _web_mercator_to_latlon(x_end, y_end)
+                    return (lon_min, lon_max, lat_min, lat_max)
+        except Exception:
+            pass
+        return None
+
+    def _generate_map_download(self):
+        """Generate map file content for download."""
+        split_dir = self.split_select.value
+        variable_name = self.variable_select.value
+
+        if not split_dir or not variable_name:
+            self._show_error("No split or variable selected")
+            return None
+
+        self.loading_indicator.value = True
+        self.error_pane.visible = False
+
+        try:
+            from .data import load_location_coordinates
+
+            # Load data
+            var_file = (
+                self.config.root
+                / split_dir
+                / self.config.metrics_subfolder
+                / f"{variable_name}.parquet"
+            )
+            if not var_file.exists():
+                self._show_error(f"Variable file not found: {variable_name}")
+                return None
+
+            var_data = pd.read_parquet(var_file)
+            coords = load_location_coordinates(self.config)
+            map_data = var_data.merge(coords, on=self.config.id_column, how="left")
+            map_data = map_data.dropna(
+                subset=[self.config.lon_col, self.config.lat_col]
+            )
+
+            if map_data.empty:
+                self._show_error("No data available for download")
+                return None
+
+            # Current dataviewer extent (live from rendered map)
+            extent = self._read_live_extent()
+            if extent is None:
+                self._show_error("Map extent could not be determined")
+                return None
+
+            # Match the live map's colormap (including reversal for Sequential)
+            # and color limits (percentile-based; symmetric for Diverging).
+            cmap = _cmap_object(self.cmap_select.value)
+            values = map_data[variable_name].to_numpy()
+            valid = values[~np.isnan(values)]
+            vmin = float(np.percentile(valid, 2)) if len(valid) else None
+            vmax = float(np.percentile(valid, 98)) if len(valid) else None
+
+            if self.gradient_select.value == "Sequential":
+                cmap = cmap.reversed()
+                value_range = (vmin, vmax)
+            elif vmin is None or vmax is None:
+                value_range = None
+            else:
+                max_abs = max(abs(vmin), abs(vmax))
+                value_range = (-max_abs, max_abs)
+
+            # Marker for the currently selected location, if any
+            selected_location_id = self.state.get("selected_location_id")
+            add_marker = (
+                [("o", int(selected_location_id))]
+                if selected_location_id is not None
+                else None
+            )
+
+            timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"map_{split_dir}_{variable_name}_{timestamp}.png"
+            tmp_path = Path("/tmp") / filename
+
+            plot_map(
+                data=map_data,
+                var=variable_name,
+                master_lookup=str(self.config.lookup_path),
+                cmap=cmap,
+                value_range=value_range,
+                extent=extent,
+                grid_sampling=0.1,
+                add_coastlines=True,
+                add_marker=add_marker,
+                save_path=str(tmp_path),
+                show_plot=False,
+                dpi=300,
+            )
+
+            data = tmp_path.read_bytes()
+            tmp_path.unlink(missing_ok=True)
+
+            self.download_map_button.filename = filename
+            return BytesIO(data)
+
+        except Exception as e:
+            import traceback
+
+            logger.error(f"Error generating map download: {e}\n{traceback.format_exc()}")
+            self._show_error(f"Failed to generate map: {e!s}")
+            return None
+        finally:
+            self.loading_indicator.value = False
+
+    def _generate_timeseries_download(self):
+        """Generate timeseries file content for download."""
+        fig = self.state.get("current_timeseries_fig")
+        if fig is None:
+            self._show_error("No timeseries plot available")
+            return None
+
+        self.error_pane.visible = False
+
+        try:
+            buf = BytesIO()
+            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+
+            timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            location_id = self.state.get("selected_location_id", "unknown")
+            filename = f"timeseries_location_{location_id}_{timestamp}.png"
+
+            self.download_timeseries_button.filename = filename
+            return buf
+        except Exception as e:
+            import traceback
+
+            logger.error(
+                f"Error generating timeseries download: {e}\n{traceback.format_exc()}"
+            )
+            self._show_error(f"Failed to generate timeseries: {e!s}")
+            return None
 
 # Curated Fabio Crameri scientific colormaps for the map, grouped by gradient type.
 CRAMERI_CMAPS = {
@@ -104,6 +316,8 @@ def create_app(config: DataConfig) -> pn.Column:
         "var_spec_editor": None,
         "renderer_selector": None,
         "additional_data": None,
+        "current_timeseries_fig": None,
+        "map_rendered": False,
     }
 
     # =============================================================================
@@ -147,6 +361,34 @@ def create_app(config: DataConfig) -> pn.Column:
 
     loading_indicator = pn.indicators.LoadingSpinner(
         value=False, size=25, name="Loading…"
+    )
+
+    download_map_button = pn.widgets.FileDownload(
+        file=None,
+        filename="map.png",
+        label="Download Map",
+        button_type="primary",
+        icon="download",
+        width=150,
+        disabled=True,
+    )
+
+    download_timeseries_button = pn.widgets.FileDownload(
+        file=None,
+        filename="timeseries.png",
+        label="Download Timeseries",
+        button_type="primary",
+        icon="download",
+        width=170,
+        disabled=True,
+    )
+
+    error_pane = pn.pane.Alert(
+        "",
+        alert_type="danger",
+        sizing_mode="stretch_width",
+        visible=False,
+        styles={"min-width": "220px"},
     )
 
     # Renderer selector for additional data
@@ -294,6 +536,8 @@ def create_app(config: DataConfig) -> pn.Column:
                     timeseries_pane.clear()
                     timeseries_pane.append(timeseries_plot)
                     state["last_plot_location_id"] = location_id
+                    state["current_timeseries_fig"] = figs[0]
+                    download_timeseries_button.disabled = False
 
                 if map_data_for_location is not None and not map_data_for_location.empty:
                     map_data_table = create_map_data_table(map_data_for_location)
@@ -319,6 +563,8 @@ def create_app(config: DataConfig) -> pn.Column:
                     )
             else:
                 state["last_plot_location_id"] = None
+                state["current_timeseries_fig"] = None
+                download_timeseries_button.disabled = True
                 timeseries_pane.clear()
                 timeseries_pane.append(
                     pn.pane.Markdown(
@@ -339,6 +585,8 @@ def create_app(config: DataConfig) -> pn.Column:
 
             logger.error(f"Error loading location data: {e}\n{traceback.format_exc()}")
             state["last_plot_location_id"] = None
+            state["current_timeseries_fig"] = None
+            download_timeseries_button.disabled = True
             error_msg = f"Error: {e!s}"
             timeseries_pane.clear()
             timeseries_pane.append(pn.pane.Markdown(f"**Error:** {error_msg}"))
@@ -618,7 +866,10 @@ def create_app(config: DataConfig) -> pn.Column:
                 height=700,
                 responsive=True,
             )
-            return basemap * points * highlight_layer
+            result = basemap * points * highlight_layer
+            state["map_rendered"] = True
+            download_map_button.disabled = False
+            return result
 
         finally:
             loading_indicator.value = False
@@ -725,6 +976,8 @@ def create_app(config: DataConfig) -> pn.Column:
                 responsive=True,
             )
             map_pane.object = basemap * points * highlight_layer
+            state["map_rendered"] = True
+            download_map_button.disabled = False
 
             # Restore zoom ranges
             if saved_ranges:
@@ -835,6 +1088,24 @@ def create_app(config: DataConfig) -> pn.Column:
     cmap_select.param.watch(on_cmap_change, "value")
 
     # =============================================================================
+    # DOWNLOAD HANDLER
+    # =============================================================================
+
+    download_handler = DownloadHandler(
+        state=state,
+        split_select=split_select,
+        variable_select=variable_select,
+        cmap_select=cmap_select,
+        gradient_select=gradient_select,
+        config=config,
+        error_pane=error_pane,
+        loading_indicator=loading_indicator,
+        download_map_button=download_map_button,
+        download_timeseries_button=download_timeseries_button,
+        map_pane=map_pane,
+    )
+
+    # =============================================================================
     # VAR SPEC EDITOR
     # =============================================================================
 
@@ -943,9 +1214,15 @@ def create_app(config: DataConfig) -> pn.Column:
 
     config_toggle.on_click(toggle_config)
 
-    controls = [variable_select, location_input, gradient_select, cmap_select, loading_indicator]
+    controls = [variable_select, location_input, gradient_select, cmap_select, loading_indicator, download_map_button, download_timeseries_button]
     if not single_split:
         controls.insert(0, split_select)
+
+    controls_row = pn.Row(
+        *controls,
+        error_pane,
+        sizing_mode="stretch_width",
+    )
 
     map_with_config = pn.Row(
         map_pane,
@@ -977,9 +1254,7 @@ def create_app(config: DataConfig) -> pn.Column:
             "# Dataviewer",
             sizing_mode="stretch_width",
         ),
-        pn.Row(
-            *controls,
-        ),
+        controls_row,
         info_pane,
         # Renderer selector for additional data
         pn.Row(

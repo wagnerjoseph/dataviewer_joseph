@@ -49,6 +49,25 @@ class TestCreateApp:
             if hasattr(obj, "object")
         )
 
+    def test_create_app_preloads_var_specs(self, data_config):
+        """Test create_app accepts var_specs to preload the editor."""
+        from dataviewer_joseph.var_spec_editor import VarSpecEditor
+
+        specs = [{"name": "swe", "label": "Snow Water Eq", "color": "#123456"}]
+        app = create_app(data_config, var_specs=specs)
+
+        # The editor is hidden in state; verify app built without error
+        assert hasattr(app, "objects")
+        assert len(app.objects) > 0
+
+        # Directly verify from_var_specs semantics are applied by the editor class
+        editor = VarSpecEditor(
+            available_variables=["swe", "lai"], on_config_change=lambda: None
+        )
+        editor.add_subplot("swe")
+        editor.from_var_specs(specs)
+        assert editor._subplots[0]["primary"]["label"].value == "Snow Water Eq"
+
     def test_app_with_empty_data_raises(self, tmp_path):
         """Test that app creation fails gracefully with no data."""
         config = DataConfig(root=tmp_path)

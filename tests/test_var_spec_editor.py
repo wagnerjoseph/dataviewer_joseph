@@ -146,6 +146,83 @@ class TestVarSpecEditor:
         assert "align_zero" in overlay
         assert "compute_corr" in overlay
 
+    def test_from_var_specs_rebuilds_subplots_and_overlays(self):
+        """Test that from_var_specs reconstructs subplots and overlays."""
+        editor = VarSpecEditor(available_variables=["var1", "var2", "var3"])
+        editor.add_subplot("var1")
+        editor.add_variable(0, "var2")
+        editor.add_variable(0, "var3")
+        editor.add_subplot("var1")
+        # remove the extra default subplot for a clean check
+        editor.remove_subplot(1)
+
+        specs = editor.to_var_specs()
+        specs[1]["label"] = "Overlay two"
+        specs[1]["add_second_axis"] = True
+        specs[1]["align_zero"] = True
+
+        loaded = VarSpecEditor(available_variables=["var1", "var2", "var3"])
+        loaded.from_var_specs(specs)
+
+        assert len(loaded._subplots) == 1
+        assert loaded._subplots[0]["primary"]["name"].value == "var1"
+        assert len(loaded._subplots[0]["overlays"]) == 2
+        assert loaded._subplots[0]["overlays"][0]["name"].value == "var2"
+        assert loaded._subplots[0]["overlays"][0]["label"].value == "Overlay two"
+        assert loaded._subplots[0]["overlays"][0]["add_second_axis"].value is True
+        assert loaded._subplots[0]["overlays"][0]["align_zero"].value is True
+
+        assert loaded.to_var_specs() == specs
+
+    def test_json_round_trip_with_tuples(self):
+        """Test to_json/from_json round-trips thresholds as tuples."""
+        editor = VarSpecEditor(available_variables=["var1", "var2"])
+        editor.add_subplot("var1")
+        editor.add_variable(0, "var2")
+        editor._subplots[0]["primary"]["lower_threshold_val"].value = 0.5
+        editor._subplots[0]["primary"]["lower_threshold_color"].value = "#00ff00"
+        editor._subplots[0]["overlays"][0]["threshold_mode"].value = "Percentile"
+        editor._subplots[0]["overlays"][0]["upper_percentile"].value = 90
+
+        text = editor.to_json()
+        loaded = VarSpecEditor(available_variables=["var1", "var2"])
+        loaded.from_json(text)
+
+        original = editor.to_var_specs()
+        result = loaded.to_var_specs()
+        assert result == original
+        assert result[0]["lower_treshold"] == (0.5, "#00ff00")
+        assert result[1]["upper_percentile"][0] == 90
+
+    def test_from_json_accepts_bare_list(self):
+        """Test from_json accepts a bare list of specs."""
+        editor = VarSpecEditor(available_variables=["var1"])
+        editor.add_subplot("var1")
+        editor._subplots[0]["primary"]["color"].value = "#112233"
+
+        text = editor.to_json()
+        import json
+
+        bare = json.dumps(editor.to_var_specs())
+
+        loaded = VarSpecEditor(available_variables=["var1"])
+        loaded.from_json(bare)
+        assert loaded.to_var_specs() == editor.to_var_specs()
+
+        # wrapped envelope also works
+        loaded2 = VarSpecEditor(available_variables=["var1"])
+        loaded2.from_json(text)
+        assert loaded2.to_var_specs() == editor.to_var_specs()
+
+    def test_from_json_invalid_raises(self):
+        """Test from_json raises on malformed input."""
+        editor = VarSpecEditor(available_variables=["var1"])
+        try:
+            editor.from_json('{"format": "other"}')
+            assert False, "expected ValueError"
+        except ValueError:
+            pass
+
     def test_create_var_spec_editor(self):
         """Test create_var_spec_editor helper function."""
         editor = create_var_spec_editor(["var1", "var2"])

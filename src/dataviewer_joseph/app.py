@@ -274,11 +274,14 @@ def _cmap_object(name: str):
     return crameri_cm.cmaps[name]
 
 
-def create_app(config: DataConfig) -> pn.Column:
+def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Column:
     """Create the interactive data viewer application.
 
     Args:
         config: DataConfig instance pointing to data root
+        var_specs: Optional list of timeseries var_specs to preload into the
+            var_spec editor. Lets a saved var config be reused for a new
+            analysis. See ``VarSpecEditor.from_var_specs``.
 
     Returns:
         Panel Column application with map, timeseries, map data table, and additional data
@@ -1123,10 +1126,83 @@ def create_app(config: DataConfig) -> pn.Column:
     # Add default subplots (one per variable, creating 3 panels by default)
     for var in ts_variables[:3]:
         var_spec_editor.add_subplot(var)
+
+    # Preload a saved configuration for a new analysis, if provided
+    if var_specs:
+        var_spec_editor.from_var_specs(var_specs)
     state["var_spec_editor"] = var_spec_editor
 
     # Use the editor's live layout (automatically updates on add/remove)
     var_spec_pane = var_spec_editor.layout
+
+    # =============================================================================
+    # VAR CONFIG IMPORT / EXPORT
+    # =============================================================================
+
+    def _generate_var_config_download():
+        """Generate the var config JSON for download."""
+        try:
+            data = var_spec_editor.to_json().encode("utf-8")
+            timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"var_config_{timestamp}.json"
+            download_var_config_button.filename = filename
+            return BytesIO(data)
+        except Exception as e:
+            import traceback
+
+            logger.error(
+                f"Error generating var config: {e}\n{traceback.format_exc()}"
+            )
+            return None
+
+    download_var_config_button = pn.widgets.FileDownload(
+        file=None,
+        filename="var_config.json",
+        label="Download var config",
+        button_type="primary",
+        icon="download",
+        width=170,
+    )
+    download_var_config_button.callback = _generate_var_config_download
+
+    upload_var_config = pn.widgets.FileInput(
+        name="Upload var config",
+        accept=".json",
+        width=170,
+    )
+
+    def on_var_config_upload(event):
+        """Load an uploaded var config into the editor and refresh the plot."""
+        if not event.new:
+            return
+        try:
+            text = event.new.decode("utf-8")
+            var_spec_editor.from_json(text)
+            regenerate_timeseries()
+            error_pane.visible = False
+        except Exception as e:
+            import traceback
+
+            logger.error(
+                f"Error importing var config: {e}\n{traceback.format_exc()}"
+            )
+            error_pane.object = f"**Error:** Failed to import var config: {e!s}"
+            error_pane.visible = True
+
+    upload_var_config.param.watch(on_var_config_upload, "value")
+
+    var_config_controls = pn.Row(
+        download_var_config_button,
+        upload_var_config,
+        pn.pane.Markdown(
+            "_Export the current timeseries config, or import a saved one. "
+            "Imported config applies immediately._",
+            width=300,
+            margin=(10, 5),
+        ),
+        sizing_mode="stretch_width",
+        margin=(5, 5),
+    )
 
     # =============================================================================
     # INITIALIZATION
@@ -1178,6 +1254,7 @@ def create_app(config: DataConfig) -> pn.Column:
 
     # Collapsible floating var_spec editor panel (overlays the map)
     config_panel = pn.Column(
+        var_config_controls,
         var_spec_pane,
         sizing_mode="stretch_width",
         visible=False,

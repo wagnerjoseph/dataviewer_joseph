@@ -88,6 +88,28 @@ data_root/
     └── ...
 ```
 
+## Reusing a timeseries var config
+
+The exact timeseries plotting (variables, colors, overlays, thresholds) is driven
+by a **var config**. You can export it, edit it, and reuse it:
+
+- **In the app:** open the **Config** panel. Use **Download var config** to save the
+  current timeseries setup as a `.json` file, and **Upload var config** to load a
+  saved one (the plot updates immediately).
+- **For a new analysis:** pass a saved `var_specs` list to `create_app` so a fresh
+  session starts with the exact same timeseries configuration:
+
+```python
+import json
+from dataviewer_joseph import create_app, DataConfig
+
+with open("var_config.json") as f:
+    saved = json.load(f)["var_specs"]
+
+app = create_app(DataConfig(root="/path/to/my/data/dataviewer_auto"), var_specs=saved)
+app.show()
+```
+
 ## Development
 
 For contributors working on the source repository.

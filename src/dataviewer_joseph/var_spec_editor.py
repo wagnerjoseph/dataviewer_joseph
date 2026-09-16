@@ -434,6 +434,171 @@ class VarSpecEditor(param.Parameterized):
 
         return specs
 
+    _THRESHOLD_KEYS = (
+        "lower_treshold",
+        "upper_treshold",
+        "lower_percentile",
+        "upper_percentile",
+    )
+
+    def _apply_spec_values(self, widgets: dict, spec: dict, is_overlay: bool) -> None:
+        """Apply a var_spec dict onto a set of variable widgets."""
+        widgets["name"].value = spec.get("name", widgets["name"].value)
+        widgets["label"].value = spec.get("label", widgets["label"].value)
+        widgets["color"].value = spec.get("color", widgets["color"].value)
+        widgets["line_width"].value = spec.get(
+            "line_width", widgets["line_width"].value)
+        widgets["alpha"].value = spec.get("alpha", widgets["alpha"].value)
+        widgets["plotstyle"].value = spec.get(
+            "plotstyle", widgets["plotstyle"].value)
+
+        has_percentile = False
+        if "lower_treshold" in spec:
+            val, color = spec["lower_treshold"]
+            widgets["lower_threshold_val"].value = val
+            if color:
+                widgets["lower_threshold_color"].value = color
+        if "upper_treshold" in spec:
+            val, color = spec["upper_treshold"]
+            widgets["upper_threshold_val"].value = val
+            if color:
+                widgets["upper_threshold_color"].value = color
+        if "lower_percentile" in spec:
+            val, color = spec["lower_percentile"]
+            widgets["lower_percentile"].value = val
+            if color:
+                widgets["lower_percentile_color"].value = color
+            has_percentile = True
+        if "upper_percentile" in spec:
+            val, color = spec["upper_percentile"]
+            widgets["upper_percentile"].value = val
+            if color:
+                widgets["upper_percentile_color"].value = color
+            has_percentile = True
+
+        if has_percentile:
+            widgets["threshold_mode"].value = "Percentile"
+        elif "lower_treshold" in spec or "upper_treshold" in spec:
+            widgets["threshold_mode"].value = "Value"
+
+        if is_overlay:
+            widgets["add_second_axis"].value = spec.get("add_second_axis", False)
+            widgets["align_zero"].value = spec.get("align_zero", False)
+            widgets["compute_corr"].value = spec.get("compute_corr", False)
+
+    def from_var_specs(self, specs: list[dict]) -> None:
+        """Rebuild the editor's subplots from a list of var_specs.
+
+        Specs without an ``add_to`` key become primary subplot variables; specs
+        with ``add_to`` are added as overlays on the matching subplot.
+
+        Args:
+            specs: List of var_spec dicts (the format produced by ``to_var_specs``).
+        """
+        self._subplots = []
+        self._next_id = 0
+
+        for spec in specs or []:
+            name = spec.get("name")
+            if not name:
+                continue
+
+            add_to = spec.get("add_to")
+            if add_to:
+                target = next(
+                    (sp for sp in self._subplots
+                     if sp["primary"]["name"].value == add_to),
+                    None,
+                )
+                if target is None:
+                    continue
+                ov_widgets = self._create_variable_widgets(
+                    name=name, is_overlay=True)
+                self._apply_spec_values(ov_widgets, spec, is_overlay=True)
+
+                def on_remove(event, sid=target["id"], oid=id(ov_widgets)):
+                    self.remove_variable(sid, oid)
+
+                ov_widgets["remove_btn"].on_click(on_remove)
+                target["overlays"].append(ov_widgets)
+            else:
+                widgets = self._create_variable_widgets(name=name, is_overlay=False)
+                self._apply_spec_values(widgets, spec, is_overlay=False)
+                subplot = {
+                    "id": self._next_id,
+                    "primary": widgets,
+                    "overlays": [],
+                }
+                self._next_id += 1
+                self._subplots.append(subplot)
+
+        self._refresh_layout()
+        self._on_widget_change()
+
+    def _specs_to_jsonable(self, specs: list[dict]) -> list[dict]:
+        """Convert specs to JSON-safe dicts (tuples -> lists)."""
+        out = []
+        for spec in specs:
+            s = dict(spec)
+            for key in self._THRESHOLD_KEYS:
+                if key in s and isinstance(s[key], tuple):
+                    s[key] = list(s[key])
+            out.append(s)
+        return out
+
+    def _specs_from_jsonable(self, obj) -> list[dict]:
+        """Convert a JSON document back into var_spec list (lists -> tuples)."""
+        if isinstance(obj, dict):
+            obj = obj.get("var_specs", [])
+        specs = []
+        for spec in obj or []:
+            s = dict(spec)
+            for key in self._THRESHOLD_KEYS:
+                if key in s and isinstance(s[key], list):
+                    s[key] = tuple(s[key])
+            specs.append(s)
+        return specs
+
+    def to_json(self, indent: int = 2) -> str:
+        """Serialize the current configuration to a JSON string.
+
+        Wraps the ``var_specs`` list in a versioned envelope so the file is
+        self-describing and can be reloaded with :meth:`from_json`.
+        """
+        import json
+
+        payload = {
+            "format": "dataviewer_var_config",
+            "version": 1,
+            "var_specs": self._specs_to_jsonable(self.to_var_specs()),
+        }
+        return json.dumps(payload, indent=indent)
+
+    def from_json(self, text: str) -> bool:
+        """Load a configuration from a JSON string produced by :meth:`to_json`.
+
+        Also accepts a bare JSON list of var_specs for flexibility.
+
+        Args:
+            text: JSON string with the var config.
+
+        Returns:
+            True on success.
+
+        Raises:
+            ValueError: If the content is not a valid var config.
+        """
+        import json
+
+        obj = json.loads(text)
+        if isinstance(obj, dict) and obj.get("format") != "dataviewer_var_config":
+            raise ValueError("Not a valid dataviewer var config file")
+        specs = self._specs_from_jsonable(obj)
+        if not isinstance(specs, list):
+            raise ValueError("var config must contain a list of variable specs")
+        self.from_var_specs(specs)
+        return True
+
     def add_var(self, name: str | None = None) -> None:
         """Backward-compatible alias for add_subplot."""
         self.add_subplot(name)

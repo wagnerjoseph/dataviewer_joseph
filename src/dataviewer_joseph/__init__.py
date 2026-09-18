@@ -27,6 +27,12 @@ from .data import (
     load_variable_data,
 )
 from .prepare import prepare_dataviewer_data
+from .serve import (
+    build_websocket_origins,
+    is_loopback,
+    local_ip,
+    serve_app,
+)
 from .var_spec_editor import VarSpecEditor, create_var_spec_editor
 
 __version__ = "0.2.0"
@@ -35,16 +41,20 @@ __all__ = [
     "DataConfig",
     "DataIndex",
     "VarSpecEditor",
+    "build_websocket_origins",
     "create_app",
     "create_var_spec_editor",
     "find_splits",
     "generate_dummy_data",
     "get_timeseries_variables",
     "get_variable_names",
+    "is_loopback",
     "load_additional_data_for_location",
     "load_location_coordinates",
     "load_map_data_for_location",
     "load_timeseries_for_location",
     "load_variable_data",
+    "local_ip",
     "prepare_dataviewer_data",
+    "serve_app",
 ]

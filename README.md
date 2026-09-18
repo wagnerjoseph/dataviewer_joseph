@@ -178,6 +178,29 @@ app = create_app(DataConfig(root="/path/to/my/data/dataviewer_auto"))
 app.servable()   # serve via `panel serve app.py`
 ```
 
+For full control over where the app is served (the same options as the bash
+`run_app.py`), use `serve_app` — the machine's short hostname is automatically
+an allowed WebSocket origin, so `http://jwagner:3000` works out of the box:
+
+```python
+from dataviewer_joseph import create_app, DataConfig, serve_app
+
+app = create_app(DataConfig(root="/path/to/my/data/dataviewer_auto"))
+
+# Local only
+serve_app(app, port=3000, address="localhost")
+
+# Accessible to others on your network (0.0.0.0 binds to all interfaces),
+# plus any extra WebSocket origins you need:
+serve_app(
+    app,
+    port=3000,
+    address="0.0.0.0",
+    allow_websocket_origin=["192.168.1.23:3000"],
+    show=True,
+)
+```
+
 ### Data Structure
 
 The app reads a root folder containing a lookup table and numbered `split_*` subfolders. All column and folder names are configurable; this is the default layout:

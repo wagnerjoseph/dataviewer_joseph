@@ -2,31 +2,9 @@
 """Run the dataviewer_joseph application."""
 
 import argparse
-import socket
 from pathlib import Path
 
-import panel as pn
-
-from dataviewer_joseph import DataConfig, create_app, generate_dummy_data
-
-
-def _local_ip() -> str | None:
-    """Return the machine's primary outbound LAN IP, or None if unavailable."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except OSError:
-        return None
-    finally:
-        s.close()
-
-
-def _is_loopback(address: str) -> bool:
-    """Return True if the bind address only serves the local machine."""
-    if address == "0.0.0.0":
-        return False
-    return address in ("localhost", "127.0.0.1", "::1")
+from dataviewer_joseph import DataConfig, create_app, generate_dummy_data, serve_app
 
 
 def main() -> None:
@@ -92,52 +70,12 @@ def main() -> None:
     print(f"Data directory: {data_path}")
     app = create_app(config)
 
-    # Build the WebSocket origin allowlist. Bokeh refuses live connections from
-    # origins it doesn't know about, so always allow the bound address plus
-    # localhost/127.0.0.1, the machine's short hostname, and any origins the
-    # user supplied explicitly.
-    websocket_origins = [
-        f"localhost:{args.port}",
-        f"127.0.0.1:{args.port}",
-        f"{args.address}:{args.port}",
-    ]
-    host = socket.gethostname()
-    if host:
-        websocket_origins.append(f"{host}:{args.port}")
-    for origin in args.allow_websocket_origin or []:
-        websocket_origins.append(origin)
-
-    # Remove duplicates while preserving order.
-    websocket_origins = list(dict.fromkeys(websocket_origins))
-
-    host = socket.gethostname()
-
-    # Where the app can be reached.
-    print(f"\nApp served at http://{args.address}:{args.port}")
-    print(f"  Local access:   http://localhost:{args.port}")
-    if host:
-        print(f"  Hostname:       http://{host}:{args.port}")
-    if _is_loopback(args.address):
-        print(
-            "  Network:        local only (use --address 0.0.0.0 to share "
-            "with others on the network)"
-        )
-    else:
-        local_ip = _local_ip()
-        if local_ip:
-            print(f"  Others on network: http://{local_ip}:{args.port}")
-        else:
-            print(
-                "  Others on network: run 'hostname -I' to find your IP and "
-                "share http://<ip>:{port}"
-            )
-
     # Serve the app (blocks until the server is stopped)
-    pn.serve(
+    serve_app(
         app,
         port=args.port,
         address=args.address,
-        websocket_origin=websocket_origins,
+        allow_websocket_origin=args.allow_websocket_origin,
         show=args.show,
     )
 

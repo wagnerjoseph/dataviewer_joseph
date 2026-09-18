@@ -79,3 +79,5 @@ class TestPrepareDataviewerData:
         assert (out_dir / "ers_tile_id_location_id.parquet").exists()
         assert (out_dir / "metrics_global_plot" / "correlation.parquet").exists()
         assert (out_dir / "timeseries" / "0001.parquet").exists()
+        # A var-config folder is always created so saved configs can land here.
+        assert (out_dir / "config").is_dir()

@@ -40,7 +40,6 @@ from .data import (
 from .plotting import (
     add_dynamic_sizing,
     create_map_data_table,
-    create_renderer_selector,
     plot_location_timeseries,
     render_additional_data,
 )
@@ -51,6 +50,57 @@ logger = logging.getLogger(__name__)
 pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
+
+
+def _config_timestamp() -> str:
+    """Return a sortable timestamp string for a var config filename."""
+    return pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+
+
+def save_var_config(config: DataConfig, json_text: str) -> Path:
+    """Save a var config JSON string into the data's config folder.
+
+    Args:
+        config: DataConfig pointing at the data root
+        json_text: Serialized var config JSON
+
+    Returns:
+        Path to the written file
+    """
+    config_dir = config.config_dir
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / f"var_config_{_config_timestamp()}.json"
+    path.write_text(json_text, encoding="utf-8")
+    logger.info(f"Saved var config to {path}")
+    return path
+
+
+def load_most_recent_var_config(config: DataConfig) -> str | None:
+    """Return the content of the most recent var config in the data folder.
+
+    The most recent file is chosen by modification time (ties broken by
+    filename, which embeds a timestamp). Returns ``None`` if no config exists.
+
+    Args:
+        config: DataConfig pointing at the data root
+
+    Returns:
+        The JSON text of the newest config, or None if none found
+    """
+    config_dir = config.config_dir
+    if not config_dir.is_dir():
+        return None
+
+    files = [p for p in config_dir.glob("*.json") if p.is_file()]
+    if not files:
+        return None
+
+    newest = max(files, key=lambda p: (p.stat().st_mtime, p.name))
+    try:
+        return newest.read_text(encoding="utf-8")
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"Could not read var config {newest}: {e}")
+        return None
 
 
 def _web_mercator_to_latlon(x: float, y: float) -> tuple[float, float]:
@@ -317,7 +367,6 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         "updating_location_input": False,
         "last_plot_location_id": None,
         "var_spec_editor": None,
-        "renderer_selector": None,
         "additional_data": None,
         "current_timeseries_fig": None,
         "map_rendered": False,
@@ -393,21 +442,6 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         visible=False,
         styles={"min-width": "220px"},
     )
-
-    # Renderer selector for additional data
-    def on_renderer_change(renderer_type):
-        """Re-render additional data when renderer type changes."""
-        additional_data = state.get("additional_data")
-        if additional_data is not None:
-            render_and_display_additional_data(additional_data)
-
-    renderer_selector = create_renderer_selector(
-        available_renderers=config.renderer_options,
-        default_renderer=config.default_renderer,
-        on_change=on_renderer_change,
-        auto_suggest=True,
-    )
-    state["renderer_selector"] = renderer_selector
 
     # =============================================================================
     # PANES
@@ -543,7 +577,9 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                     download_timeseries_button.disabled = False
 
                 if map_data_for_location is not None and not map_data_for_location.empty:
-                    map_data_table = create_map_data_table(map_data_for_location)
+                    map_data_table = create_map_data_table(
+                        map_data_for_location, width=460, height=380
+                    )
                     map_data_table_pane.clear()
                     map_data_table_pane.append(map_data_table)
                 else:
@@ -601,24 +637,14 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             )
 
     def render_and_display_additional_data(attrs):
-        """Render additional data using selected renderer and display it.
-        
+        """Render additional data (auto-suggested style) and display it.
+
         Args:
             attrs: pandas Series with attribute names as index
         """
-        renderer_selector = state.get("renderer_selector")
-        if renderer_selector is None:
-            return
-        
-        renderer_type = renderer_selector.get_renderer_type()
-        
-        # Update selector with data characteristics (for auto-suggest)
-        renderer_selector.set_data(attrs)
-        
         try:
             plot = render_additional_data(
                 attrs,
-                renderer_type=renderer_type,
                 title="Additional Data",
                 width=400,
                 height=300,
@@ -1094,7 +1120,8 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
     # DOWNLOAD HANDLER
     # =============================================================================
 
-    download_handler = DownloadHandler(
+    # Instantiate the handler (its constructor wires up the FileDownload callbacks).
+    DownloadHandler(
         state=state,
         split_select=split_select,
         variable_select=variable_select,
@@ -1127,9 +1154,20 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
     for var in ts_variables[:3]:
         var_spec_editor.add_subplot(var)
 
-    # Preload a saved configuration for a new analysis, if provided
+    # Preload a saved configuration for a new analysis, if provided.
+    # Otherwise auto-import the most recent config saved in the data folder.
     if var_specs:
         var_spec_editor.from_var_specs(var_specs)
+    else:
+        try:
+            saved_text = load_most_recent_var_config(config)
+            if saved_text:
+                var_spec_editor.from_json(saved_text)
+                logger.info("Auto-imported the most recent var config")
+        except Exception as e:
+            logger.warning(
+                f"Could not auto-import most recent var config: {e}"
+            )
     state["var_spec_editor"] = var_spec_editor
 
     # Use the editor's live layout (automatically updates on add/remove)
@@ -1140,12 +1178,16 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
     # =============================================================================
 
     def _generate_var_config_download():
-        """Generate the var config JSON for download."""
+        """Generate the var config JSON for download and save it to the data folder."""
         try:
-            data = var_spec_editor.to_json().encode("utf-8")
-            timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"var_config_{timestamp}.json"
+            json_text = var_spec_editor.to_json()
+            data = json_text.encode("utf-8")
+            filename = f"var_config_{_config_timestamp()}.json"
             download_var_config_button.filename = filename
+            try:
+                save_var_config(config, json_text)
+            except Exception as e:
+                logger.warning(f"Could not save var config to data folder: {e}")
             return BytesIO(data)
         except Exception as e:
             import traceback
@@ -1333,12 +1375,6 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         ),
         controls_row,
         info_pane,
-        # Renderer selector for additional data
-        pn.Row(
-            renderer_selector.layout,
-            sizing_mode="fixed",
-            height=80,
-        ),
         main_layout,
         sizing_mode="stretch_width",
         styles={"margin": "0", "padding": "0"},

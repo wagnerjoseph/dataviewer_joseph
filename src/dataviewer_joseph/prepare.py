@@ -369,7 +369,12 @@ def prepare_dataviewer_data(
     
     # Copy lookup table
     copy_lookup_table(lookup_dir, output_path)
-    
+
+    # Create the var-config folder (saved viewer configs land here)
+    config_dir = output_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created var config folder: {config_dir}")
+
     # Process each split
     for split_name in splits:
         split_label = "(root)" if split_name == "." else split_name

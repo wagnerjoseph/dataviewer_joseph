@@ -1,8 +1,14 @@
 """Tests for the Panel application."""
 
+import json
+
 import pandas as pd
 
-from dataviewer_joseph.app import create_app
+from dataviewer_joseph.app import (
+    create_app,
+    load_most_recent_var_config,
+    save_var_config,
+)
 from dataviewer_joseph.config import DataConfig
 
 
@@ -82,3 +88,46 @@ class TestCreateApp:
             if hasattr(obj, "object")
         )
         assert has_alert
+
+
+class TestVarConfigPersistence:
+    """Tests for saving/loading var configs in the data folder."""
+
+    def test_save_var_config_writes_to_config_folder(self, data_config):
+        """Saving a config writes a JSON file into the data's config folder."""
+        obj = {"format": "dataviewer_var_config", "version": 1, "var_specs": []}
+        path = save_var_config(data_config, json.dumps(obj))
+
+        assert path.parent == data_config.config_dir
+        assert path.exists()
+        assert path.suffix == ".json"
+        assert json.loads(path.read_text())["var_specs"] == []
+
+    def test_load_most_recent_config_returns_newest(self, data_config):
+        """The most recently saved config file is returned."""
+        older = data_config.config_dir / "var_config_20200101_000000.json"
+        older.parent.mkdir(parents=True, exist_ok=True)
+        older.write_text(json.dumps({"version": 0}))
+
+        obj = {"format": "dataviewer_var_config", "version": 1, "var_specs": [
+            {"name": "swe", "label": "Snow", "color": "#112233"}
+        ]}
+        save_var_config(data_config, json.dumps(obj))
+
+        loaded = json.loads(load_most_recent_var_config(data_config))
+        assert loaded["version"] == 1
+
+    def test_load_most_recent_config_returns_none_when_empty(self, data_config):
+        """No config file means no config is loaded."""
+        assert load_most_recent_var_config(data_config) is None
+
+    def test_create_app_auto_imports_most_recent_config(self, data_config):
+        """A saved config in the data folder is applied on app creation."""
+        specs = {"format": "dataviewer_var_config", "version": 1, "var_specs": [
+            {"name": "backscatter40", "label": "Backscatter", "color": "#123456"}
+        ]}
+        save_var_config(data_config, json.dumps(specs))
+
+        app = create_app(data_config)
+        assert hasattr(app, "objects")
+        assert len(app.objects) > 0

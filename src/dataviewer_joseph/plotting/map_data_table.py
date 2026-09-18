@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 def create_map_data_table(
     values: pd.Series | dict,
-    width: int = 250,
-    height: int = 300,
+    width: int = 460,
+    height: int = 380,
 ) -> pn.pane:
     """Create a sorted key-value table of map-data variables for a location.
 

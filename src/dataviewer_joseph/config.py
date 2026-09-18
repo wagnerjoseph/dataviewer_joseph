@@ -21,6 +21,7 @@ class DataConfig:
         lat_col: Name of latitude column in lookup
         lon_col: Name of longitude column in lookup
         tile_col: Name of tile identifier column in lookup
+        config_subfolder: Subfolder where saved var configs are stored
         renderer_options: Available renderer types for additional data
         default_renderer: Default renderer type for additional data
     """
@@ -34,6 +35,7 @@ class DataConfig:
     lat_col: str = "lat"
     lon_col: str = "lon"
     tile_col: str = "tile_id"
+    config_subfolder: str = "config"
     renderer_options: list[str] = field(
         default_factory=lambda: ["bar", "scatter", "table", "histogram", "box"]
     )
@@ -48,3 +50,8 @@ class DataConfig:
     def lookup_path(self) -> Path:
         """Path to the lookup file."""
         return self.root / self.lookup_file
+
+    @property
+    def config_dir(self) -> Path:
+        """Directory where saved var configs are stored."""
+        return self.root / self.config_subfolder

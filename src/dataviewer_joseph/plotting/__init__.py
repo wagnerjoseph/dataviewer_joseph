@@ -1,7 +1,14 @@
 """Plotting utilities for dataviewer_joseph."""
 
 from .map_data_table import create_map_data_table
-from .maps import _auto_clim, add_dynamic_sizing, create_interactive_map
+from .maps import (
+    _auto_clim,
+    add_dynamic_sizing,
+    create_interactive_map,
+    find_nearest_location,
+    haversine_km,
+    web_mercator_to_latlon,
+)
 from .renderers import (
     RENDERERS,
     get_renderer,
@@ -24,7 +31,9 @@ __all__ = [
     "create_interactive_map",
     "create_map_data_table",
     "create_renderer_selector",
+    "find_nearest_location",
     "get_renderer",
+    "haversine_km",
     "plot_location_timeseries",
     "render_additional_data",
     "render_bar",
@@ -33,4 +42,5 @@ __all__ = [
     "render_scatter",
     "render_table",
     "suggest_renderer",
+    "web_mercator_to_latlon",
 ]

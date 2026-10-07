@@ -1,6 +1,7 @@
 """Interactive map plotting for dataviewer_joseph."""
 
 import logging
+import math
 import time
 from typing import Any
 
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 hv.extension("bokeh")
 
+EARTH_RADIUS_KM = 6371.0
+
 
 def _auto_clim(values: np.ndarray) -> tuple[float, float]:
     """Compute automatic color limits (2nd and 98th percentile)."""
@@ -20,6 +23,70 @@ def _auto_clim(values: np.ndarray) -> tuple[float, float]:
     if len(valid) == 0:
         return (None, None)
     return (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
+
+
+def web_mercator_to_latlon(x: float, y: float) -> tuple[float, float]:
+    """Convert Web Mercator (meters) to lat/lon (degrees)."""
+    R = 6378137  # Earth radius in meters
+    lon = (x / R) * (180 / math.pi)
+    lat = (math.atan(math.exp(y / R)) * (360 / math.pi)) - 90
+    return lat, lon
+
+
+def haversine_km(
+    lat1: float | np.ndarray,
+    lon1: float | np.ndarray,
+    lat2: float | np.ndarray,
+    lon2: float | np.ndarray,
+) -> float | np.ndarray:
+    """Compute great-circle distances in km between two points (vectorized).
+
+    NaN coordinates propagate to NaN distances.
+    """
+    lat1 = np.radians(np.asarray(lat1, dtype=float))
+    lon1 = np.radians(np.asarray(lon1, dtype=float))
+    lat2 = np.radians(np.asarray(lat2, dtype=float))
+    lon2 = np.radians(np.asarray(lon2, dtype=float))
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(
+        (lon2 - lon1) / 2
+    ) ** 2
+    a = np.clip(a, 0.0, 1.0)
+    return 2.0 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))
+
+
+def find_nearest_location(
+    data: pd.DataFrame,
+    lon_col: str,
+    lat_col: str,
+    lon: float,
+    lat: float,
+    max_distance_km: float = 15.0,
+) -> int | None:
+    """Find the location nearest to a query point within a maximum distance.
+
+    Args:
+        data: DataFrame with location coordinates
+        lon_col: Name of the longitude column
+        lat_col: Name of the latitude column
+        lon: Longitude of the query point (degrees)
+        lat: Latitude of the query point (degrees)
+        max_distance_km: Maximum snapping distance in km
+
+    Returns:
+        Positional row index of the nearest location, or None if no
+        location is within max_distance_km
+    """
+    if data is None or data.empty:
+        return None
+    lons = pd.to_numeric(data[lon_col], errors="coerce").to_numpy(dtype=float)
+    lats = pd.to_numeric(data[lat_col], errors="coerce").to_numpy(dtype=float)
+    distances = haversine_km(lat, lon, lats, lons)
+    if not np.isfinite(distances).any():
+        return None
+    pos = int(np.nanargmin(distances))
+    if distances[pos] > max_distance_km:
+        return None
+    return pos
 
 
 def add_dynamic_sizing(plot: Any, element: Any) -> None:

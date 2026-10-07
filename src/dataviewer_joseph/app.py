@@ -12,7 +12,6 @@ Features:
 
 from io import BytesIO
 import logging
-import math
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -40,8 +39,10 @@ from .data import (
 from .plotting import (
     add_dynamic_sizing,
     create_map_data_table,
+    find_nearest_location,
     plot_location_timeseries,
     render_additional_data,
+    web_mercator_to_latlon,
 )
 from .var_spec_editor import VarSpecEditor
 
@@ -50,6 +51,19 @@ logger = logging.getLogger(__name__)
 pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
+
+# Scale rem/em-based text to 70% and compact the px-sized bokeh/panel widgets
+# so the app looks right at 100% browser zoom
+pn.config.raw_css = [
+    "html { font-size: 11.2px; }",
+    ".bk-root .bk-input { font-size: 12px !important; padding: 0 6px !important; min-height: 24px !important; line-height: 22px !important; }",
+    ".bk-root select.bk-input { padding-right: 24px !important; background-position: right 4px center !important; background-size: 7px 5px !important; }",
+    ".bk-root .bk-btn { font-size: 12px !important; padding: 2px 8px !important; min-height: 24px !important; line-height: 20px !important; }",
+    # Let the timeseries image pane hug its rendered image (panel sizes the box
+    # to the PNG's natural pixel height, which leaves dead space below the image)
+    ".ts-plot, .bk-root .ts-plot { height: auto !important; flex: 0 0 auto !important; }",
+    ".ts-col, .bk-root .ts-col { flex: 0 0 auto !important; }",
+]
 
 
 def _config_timestamp() -> str:
@@ -101,14 +115,6 @@ def load_most_recent_var_config(config: DataConfig) -> str | None:
     except Exception as e:  # pragma: no cover - defensive
         logger.warning(f"Could not read var config {newest}: {e}")
         return None
-
-
-def _web_mercator_to_latlon(x: float, y: float) -> tuple[float, float]:
-    """Convert Web Mercator (meters) to lat/lon (degrees)."""
-    R = 6378137  # Earth radius in meters
-    lon = (x / R) * (180 / math.pi)
-    lat = (math.atan(math.exp(y / R)) * (360 / math.pi)) - 90
-    return lat, lon
 
 
 def _trigger_browser_download(data: bytes, filename: str):
@@ -173,8 +179,8 @@ class DownloadHandler:
                     y_end = s.y_range.end
                     if None in (x_start, x_end, y_start, y_end):
                         return None
-                    lat_min, lon_min = _web_mercator_to_latlon(x_start, y_start)
-                    lat_max, lon_max = _web_mercator_to_latlon(x_end, y_end)
+                    lat_min, lon_min = web_mercator_to_latlon(x_start, y_start)
+                    lat_max, lon_max = web_mercator_to_latlon(x_end, y_end)
                     return (lon_min, lon_max, lat_min, lat_max)
         except Exception:
             pass
@@ -317,6 +323,7 @@ CRAMERI_CMAPS = {
 }
 DEFAULT_GRADIENT = "Sequential"
 DEFAULT_CMAP = "batlow"
+SNAP_DISTANCE_KM = 15.0
 
 
 def _cmap_object(name: str):
@@ -382,6 +389,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         name="Split",
         options={s: s for s in available_splits},
         value=available_splits[-1] if available_splits else None,
+        width=140,
     )
 
     # Get variables for initial split
@@ -392,23 +400,27 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         name="Variable",
         options=initial_variables,
         value=initial_variables[0] if initial_variables else None,
+        width=160,
     )
 
     location_input = pn.widgets.IntInput(
         name="Location ID",
         value=None,
         step=1,
+        width=110,
     )
 
     gradient_select = pn.widgets.Select(
         name="Gradient",
         options=list(CRAMERI_CMAPS.keys()),
         value=DEFAULT_GRADIENT,
+        width=110,
     )
     cmap_select = pn.widgets.Select(
         name="Colormap",
         options=CRAMERI_CMAPS[DEFAULT_GRADIENT],
         value=DEFAULT_CMAP,
+        width=110,
     )
 
     loading_indicator = pn.indicators.LoadingSpinner(
@@ -421,7 +433,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         label="Download Map",
         button_type="primary",
         icon="download",
-        width=150,
+        width=105,
         disabled=True,
     )
 
@@ -431,7 +443,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         label="Download Timeseries",
         button_type="primary",
         icon="download",
-        width=170,
+        width=119,
         disabled=True,
     )
 
@@ -461,8 +473,9 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
     timeseries_pane = pn.Column(
         pn.pane.Markdown("**Click a location on the map to view timeseries**"),
         sizing_mode="stretch_width",
+        css_classes=["ts-col"],
     )
-    timeseries_pane.min_height = 400
+    timeseries_pane.min_height = 280
 
     map_data_table_pane = pn.Column(
         sizing_mode="stretch_both",
@@ -472,7 +485,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
     additional_data_pane = pn.Column(
         sizing_mode="fixed",
-        width=800,
+        width=560,
         margin=0,
         styles={"padding": "0"},
     )
@@ -562,14 +575,20 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                     var_specs=var_specs,
                     time_col="time",
                     location_id_col=config.id_column,
-                    figsize=(10, 5),
-                    font_scale=1.0,
+                    figsize=(9.6, 4.8),
+                    font_scale=0.8,
                     show_plot=False,
                     master_lookup=str(config.lookup_path),
                 )
 
                 if figs and len(figs) > 0:
-                    timeseries_plot = pn.pane.Matplotlib(figs[0], tight=True)
+                    timeseries_plot = pn.pane.Matplotlib(
+                        figs[0],
+                        tight=True,
+                        sizing_mode="stretch_width",
+                        css_classes=["ts-plot"],
+                        stylesheets=["div { height: auto !important; }"],
+                    )
                     timeseries_pane.clear()
                     timeseries_pane.append(timeseries_plot)
                     state["last_plot_location_id"] = location_id
@@ -578,7 +597,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
                 if map_data_for_location is not None and not map_data_for_location.empty:
                     map_data_table = create_map_data_table(
-                        map_data_for_location, width=460, height=380
+                        map_data_for_location, width=322, height=266
                     )
                     map_data_table_pane.clear()
                     map_data_table_pane.append(map_data_table)
@@ -646,8 +665,8 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             plot = render_additional_data(
                 attrs,
                 title="Additional Data",
-                width=400,
-                height=300,
+                width=280,
+                height=210,
             )
             additional_data_pane.clear()
             additional_data_pane.append(plot)
@@ -682,14 +701,20 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             var_specs=var_specs,
             time_col="time",
             location_id_col=config.id_column,
-            figsize=(10, 5),
-            font_scale=1.0,
+            figsize=(9.6, 4.8),
+            font_scale=0.8,
             show_plot=False,
             master_lookup=str(config.lookup_path),
         )
 
         if figs and len(figs) > 0:
-            timeseries_plot = pn.pane.Matplotlib(figs[0], tight=True)
+            timeseries_plot = pn.pane.Matplotlib(
+                figs[0],
+                tight=True,
+                sizing_mode="stretch_width",
+                css_classes=["ts-plot"],
+                stylesheets=["div { height: auto !important; }"],
+            )
             timeseries_pane.clear()
             timeseries_pane.append(timeseries_plot)
             state["last_plot_location_id"] = location_id
@@ -805,6 +830,45 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
         return on_selection_update
 
+    def create_tap_handler(
+        map_data: pd.DataFrame,
+        lon_col: str,
+        lat_col: str,
+        highlight_stream: hv.streams.Stream,
+    ):
+        """Create a tap callback that snaps map clicks to the nearest location."""
+
+        def on_tap(x, y):
+            """Snap a click anywhere on the map to the nearest location."""
+            if x is None or y is None:
+                return
+            if abs(x) <= 180 and abs(y) <= 90:
+                tap_lat, tap_lon = y, x
+            else:
+                tap_lat, tap_lon = web_mercator_to_latlon(x, y)
+            pos = find_nearest_location(
+                map_data,
+                lon_col,
+                lat_col,
+                tap_lon,
+                tap_lat,
+                max_distance_km=SNAP_DISTANCE_KM,
+            )
+            if pos is None:
+                selected = state.get("selected_location_id")
+                suffix = (
+                    f" (keeping Location ID `{selected}`)"
+                    if selected is not None
+                    else ""
+                )
+                info_pane.object = (
+                    f"**No location within {SNAP_DISTANCE_KM:g} km of click**{suffix}"
+                )
+                return
+            highlight_stream.event(index=[pos])
+
+        return on_tap
+
     # =============================================================================
     # MAP CREATION
     # =============================================================================
@@ -844,7 +908,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 width=800,
                 height=700,
                 responsive=True,
-                tools=["tap", "hover", "box_zoom", "wheel_zoom", "reset"],
+                tools=["hover", "box_zoom", "wheel_zoom", "reset"],
                 colorbar=True,
                 clim=clim,
                 title=f"{variable_name} - {split_dir}",
@@ -871,6 +935,12 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             ):
                 state["on_selection_update"] = create_on_selection_update()
             highlight_stream.add_subscriber(state["on_selection_update"])
+
+            # Snap clicks anywhere on the map to the nearest location
+            tap_stream = hv.streams.Tap(source=points)
+            tap_stream.add_subscriber(
+                create_tap_handler(map_data, actual_lon, actual_lat, highlight_stream)
+            )
 
             def update_highlight(index):
                 """Update highlight based on selection."""
@@ -960,7 +1030,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 width=800,
                 height=700,
                 responsive=True,
-                tools=["tap", "hover", "box_zoom", "wheel_zoom", "reset"],
+                tools=["hover", "box_zoom", "wheel_zoom", "reset"],
                 colorbar=True,
                 clim=clim,
                 title=f"{variable_name} - {split_dir}",
@@ -982,6 +1052,12 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
             if "on_selection_update" in state:
                 highlight_stream.add_subscriber(state["on_selection_update"])
+
+            # Snap clicks anywhere on the map to the nearest location
+            tap_stream = hv.streams.Tap(source=points)
+            tap_stream.add_subscriber(
+                create_tap_handler(map_data, actual_lon, actual_lat, highlight_stream)
+            )
 
             def update_highlight(index):
                 if index and len(index) > 0:
@@ -1203,14 +1279,14 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         label="Download var config",
         button_type="primary",
         icon="download",
-        width=170,
+        width=119,
     )
     download_var_config_button.callback = _generate_var_config_download
 
     upload_var_config = pn.widgets.FileInput(
         name="Upload var config",
         accept=".json",
-        width=170,
+        width=119,
     )
 
     def on_var_config_upload(event):
@@ -1239,7 +1315,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         pn.pane.Markdown(
             "_Export the current timeseries config, or import a saved one. "
             "Imported config applies immediately._",
-            width=300,
+            width=210,
             margin=(10, 5),
         ),
         sizing_mode="stretch_width",
@@ -1262,7 +1338,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         map_data_table_pane,
         additional_data_pane,
         sizing_mode="fixed",
-        height=420,
+        height=294,
         styles={
             "width": "100%",
             "gap": "10px",

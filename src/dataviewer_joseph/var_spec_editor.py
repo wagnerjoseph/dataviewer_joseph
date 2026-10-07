@@ -105,10 +105,10 @@ class VarSpecEditor(param.Parameterized):
             "name": pn.widgets.Select(
                 options=self.available_variables,
                 value=name if name in self.available_variables else (self.available_variables[0] if self.available_variables else None),
-                width=200,
+                width=150,
             ),
-            "color": pn.widgets.ColorPicker(value=color_default, width=60),
-            "label": pn.widgets.TextInput(value=label_default, width=200),
+            "color": pn.widgets.ColorPicker(value=color_default, width=45),
+            "label": pn.widgets.TextInput(value=label_default, width=150),
             "line_width": pn.widgets.FloatSlider(start=0.5, end=5, step=0.5, value=1.5),
             "alpha": pn.widgets.FloatSlider(start=0.1, end=1.0, step=0.1, value=1.0),
             "plotstyle": pn.widgets.Select(options=["line", "points", "both"], value="line"),
@@ -131,7 +131,7 @@ class VarSpecEditor(param.Parameterized):
             widgets["add_second_axis"] = pn.widgets.Checkbox(name="2nd axis", value=False)
             widgets["align_zero"] = pn.widgets.Checkbox(name="Align zero", value=False)
             widgets["compute_corr"] = pn.widgets.Checkbox(name="Correlation", value=False)
-            widgets["remove_btn"] = pn.widgets.Button(label="Remove", color="danger", width=80)
+            widgets["remove_btn"] = pn.widgets.Button(label="Remove", color="danger", width=60)
 
         for key, widget in widgets.items():
             if hasattr(widget, "param") and hasattr(widget.param, "value"):
@@ -173,7 +173,7 @@ class VarSpecEditor(param.Parameterized):
     def _create_advanced_accordion(self, widgets: dict) -> pn.Accordion:
         """Create collapsed accordion with advanced options."""
 
-        def column(*items, width=200):
+        def column(*items, width=150):
             return pn.Column(*items, width=width)
 
         value_row = pn.Row(
@@ -199,8 +199,8 @@ class VarSpecEditor(param.Parameterized):
                 "Advanced",
                 pn.Column(
                     pn.Row(
-                        column(widgets["line_width"], widgets["alpha"], width=200),
-                        column(widgets["plotstyle"], width=200),
+                        column(widgets["line_width"], widgets["alpha"], width=150),
+                        column(widgets["plotstyle"], width=150),
                     ),
                     pn.Row(widgets["threshold_mode"], margin=(5, 5)),
                     value_row,
@@ -220,9 +220,9 @@ class VarSpecEditor(param.Parameterized):
 
             primary = sp["primary"]
             primary_row = pn.Row(
-                pn.Column(primary["name"], width=210),
-                pn.Column(primary["color"], width=80),
-                pn.Column(primary["label"], width=210),
+                pn.Column(primary["name"], width=160),
+                pn.Column(primary["color"], width=60),
+                pn.Column(primary["label"], width=160),
                 margin=(5, 5, 0, 5),
                 scroll=True,
             )
@@ -231,14 +231,14 @@ class VarSpecEditor(param.Parameterized):
             overlay_rows = []
             for ov_idx, ov in enumerate(sp["overlays"]):
                 ov_row = pn.Row(
-                    pn.Column(ov["name"], width=210),
-                    pn.Column(ov["color"], width=80),
-                    pn.Column(ov["label"], width=210),
+                    pn.Column(ov["name"], width=160),
+                    pn.Column(ov["color"], width=60),
+                    pn.Column(ov["label"], width=160),
                     pn.Column(
                         ov["add_second_axis"],
                         ov["align_zero"],
                         ov["compute_corr"],
-                        width=180,
+                        width=140,
                     ),
                     ov["remove_btn"],
                     margin=(5, 5, 0, 5),
@@ -247,7 +247,7 @@ class VarSpecEditor(param.Parameterized):
                 ov_advanced = self._create_advanced_accordion(ov)
                 overlay_rows.append(pn.Column(ov_row, ov_advanced, sizing_mode="stretch_width"))
 
-            add_var_btn = pn.widgets.Button(label="+ Add variable", color="default", width=150, margin=(5, 5))
+            add_var_btn = pn.widgets.Button(label="+ Add variable", color="default", width=115, margin=(5, 5))
 
             def make_add_var(subplot_id):
                 def on_click(event):
@@ -256,7 +256,7 @@ class VarSpecEditor(param.Parameterized):
 
             add_var_btn.on_click(make_add_var(sp["id"]))
 
-            remove_sp_btn = pn.widgets.Button(label="Remove subplot", color="warning", width=120)
+            remove_sp_btn = pn.widgets.Button(label="Remove subplot", color="warning", width=90)
 
             def make_remove_subplot(subplot_id):
                 def on_click(event):
@@ -285,7 +285,7 @@ class VarSpecEditor(param.Parameterized):
         add_subplot_btn = pn.widgets.Button(
             label="+ Add subplot",
             color="success",
-            width=150,
+            width=115,
             margin=(10, 5),
         )
         add_subplot_btn.on_click(lambda e: self.add_subplot())

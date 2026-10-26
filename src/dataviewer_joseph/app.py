@@ -48,6 +48,23 @@ from .var_spec_editor import VarSpecEditor
 
 logger = logging.getLogger(__name__)
 
+
+def _valid_timeseries_specs(specs, data):
+    """Keep var_specs whose columns exist in ``data`` (splits differ).
+
+    The var-spec editor holds the specs of whichever split it was built
+    for; when a location of another split is plotted (or the plot
+    regenerates), specs referencing missing columns must be dropped —
+    otherwise plotting_joseph raises KeyError.
+    """
+    cols = set(data.columns)
+    return [
+        s for s in specs
+        if s.get("name") and s.get("name") in cols
+        and (s.get("add_to") is None or s["add_to"] in cols)
+    ]
+
+
 pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
@@ -562,11 +579,13 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 state["ts_location_id"] = location_id
                 state["ts_tile_id"] = tile_id
 
-                # Get var_specs from editor
+                # Get var_specs from editor (keep only columns of THIS split)
                 var_spec_editor = state.get("var_spec_editor")
                 var_specs = (
                     var_spec_editor.to_var_specs() if var_spec_editor else None
                 )
+                if var_specs:
+                    var_specs = _valid_timeseries_specs(var_specs, ts_data)
 
                 # Plot timeseries using plotting_joseph
                 figs = plot_location_timeseries(
@@ -688,11 +707,13 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         # Reset cache to force re-render
         state["last_plot_location_id"] = None
 
-        # Get var_specs from editor
+        # Get var_specs from editor (keep only columns of THIS split)
         var_spec_editor = state.get("var_spec_editor")
         var_specs = (
             var_spec_editor.to_var_specs() if var_spec_editor else None
         )
+        if var_specs:
+            var_specs = _valid_timeseries_specs(var_specs, ts_data)
 
         # Plot timeseries using plotting_joseph
         figs = plot_location_timeseries(
@@ -1133,6 +1154,13 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         else:
             variable_select.options = []
             variable_select.value = None
+
+        editor = state.get("var_spec_editor")
+        if editor is not None:
+            # the timeseries variables differ per split — rebuild the
+            # specs so they never reference another split's columns (the
+            # editor is created for the initial split only, app.py)
+            editor.reset(get_timeseries_variables(config, split_dir))
 
     def on_variable_change(event):
         """Handle variable selection change."""

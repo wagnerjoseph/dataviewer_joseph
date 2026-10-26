@@ -297,6 +297,21 @@ class VarSpecEditor(param.Parameterized):
             *subplot_cards,
         ]
 
+    def reset(self, names: list[str] | None = None) -> None:
+        """Rebuild the editor for a new split/selection.
+
+        Removes all subplots and (when ``names`` is given) sets the
+        available variables to ``names`` with the first three as fresh
+        default subplots — used when the split changes, so the specs never
+        reference variables of another split.
+        """
+        self._subplots = []
+        self._next_id = 0
+        if names is not None:
+            self.available_variables = list(names)
+        for name in (names or [])[:3]:
+            self.add_subplot(name)
+
     def add_subplot(self, primary_name: str | None = None) -> int:
         """Add a new subplot with a primary variable."""
         subplot_id = self._next_id

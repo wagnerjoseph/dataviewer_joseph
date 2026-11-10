@@ -115,7 +115,7 @@ class VarSpecEditor(param.Parameterized):
             "threshold_mode": pn.widgets.RadioButtonGroup(
                 options=["Value", "Percentile"],
                 value="Value",
-                button_type="primary",
+                color="primary",
             ),
             "lower_threshold_val": pn.widgets.FloatInput(value=None),
             "lower_threshold_color": pn.widgets.ColorPicker(value="#ff0000"),
@@ -128,9 +128,9 @@ class VarSpecEditor(param.Parameterized):
         }
 
         if is_overlay:
-            widgets["add_second_axis"] = pn.widgets.Checkbox(name="2nd axis", value=False)
-            widgets["align_zero"] = pn.widgets.Checkbox(name="Align zero", value=False)
-            widgets["compute_corr"] = pn.widgets.Checkbox(name="Correlation", value=False)
+            widgets["add_second_axis"] = pn.widgets.Checkbox(label="2nd axis", value=False)
+            widgets["align_zero"] = pn.widgets.Checkbox(label="Align zero", value=False)
+            widgets["compute_corr"] = pn.widgets.Checkbox(label="Correlation", value=False)
             widgets["remove_btn"] = pn.widgets.Button(label="Remove", color="danger", width=60)
 
         for key, widget in widgets.items():
@@ -311,6 +311,23 @@ class VarSpecEditor(param.Parameterized):
             self.available_variables = list(names)
         for name in (names or [])[:3]:
             self.add_subplot(name)
+
+    def update_available_variables(self, names: list[str]) -> None:
+        """Update the available variables without resetting the subplots.
+
+        Keeps all current subplots and selections; existing variables that
+        are no longer available keep their rows but are filtered out at
+        plot time, while new variables become selectable in the dropdowns.
+
+        Args:
+            names: New list of available variable names
+        """
+        self.available_variables = list(names)
+        for sp in self._subplots:
+            for widgets in [sp["primary"], *sp["overlays"]]:
+                if widgets["name"].value not in names:
+                    widgets["name"].value = None
+                widgets["name"].options = list(names)
 
     def add_subplot(self, primary_name: str | None = None) -> int:
         """Add a new subplot with a primary variable."""

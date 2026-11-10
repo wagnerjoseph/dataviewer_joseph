@@ -26,35 +26,29 @@ def main() -> None:
 
     print(f"\nAvailable splits: {index.splits}")
 
-    # Get timeseries variables
+    # Timeseries variables of the dummy data
     ts_variables = ["backscatter40", "lai", "swvl1", "baseline"]
     print(f"Timeseries variables: {ts_variables}")
 
-    # Create var_specs editor
+    # Create var_specs editor and load a configuration
     editor = VarSpecEditor(available_variables=ts_variables)
+    editor.from_var_specs(
+        [
+            {"name": "backscatter40", "label": "Backscatter [dB]", "color": "#0000ff"},
+            {"name": "lai", "label": "Leaf Area Index", "color": "#00aa00"},
+            {
+                "name": "swvl1",
+                "label": "Soil Moisture",
+                "color": "#aa00aa",
+                "add_to": "backscatter40",
+                "add_second_axis": True,
+            },
+        ]
+    )
 
-    # Add some default variables
-    editor.add_var("backscatter40")
-    editor.add_var("lai")
-    editor.add_var("swvl1")
-
-    # Configure the first variable
-    editor._var_widgets[0]["label"].value = "Backscatter [dB]"
-    editor._var_widgets[0]["color"].value = "#0000ff"
-    editor._var_widgets[0]["line_width"].value = 2.0
-
-    # Configure the second variable
-    editor._var_widgets[1]["label"].value = "Leaf Area Index"
-    editor._var_widgets[1]["color"].value = "#00aa00"
-
-    # Configure the third variable as overlay on the first
-    editor._var_widgets[2]["add_to"].value = "backscatter40"
-    editor._var_widgets[2]["add_second_axis"].value = True
-    editor._var_widgets[2]["color"].value = "#aa00aa"
-
-    # Collect var_specs
+    # Collect var_specs (what the app sends to plotting_joseph)
     var_specs = editor.to_var_specs()
-    print(f"\nGenerated var_specs:")
+    print("\nGenerated var_specs:")
     for i, spec in enumerate(var_specs):
         print(f"  {i+1}. {spec['name']} -> {spec.get('add_to', 'new panel')}")
 
@@ -78,14 +72,10 @@ def main() -> None:
     figs[0].savefig(output_path, dpi=150, bbox_inches="tight")
     print(f"Figure saved to {output_path}")
 
-    # Show the figure (optional)
-    # import matplotlib.pyplot as plt
-    # plt.show()
-
     print("\nDone!")
     print("\nTo use the interactive editor in the app:")
     print("1. Run: python scripts/run_app.py --show")
-    print("2. Expand the 'Timeseries Configuration' accordion")
+    print("2. Open the 'Config' panel (cog button on the map)")
     print("3. Add/remove variables and configure via widgets")
     print("4. Click a location on the map to see the plot")
 

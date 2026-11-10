@@ -4,7 +4,8 @@ Interactive geospatial timeseries data viewer. It plots your Earth-observation d
 
 ## Features
 
-- **Interactive Map**: GeoViews map with clickable points and location highlighting
+- **Interactive Map**: GeoViews map with clickable points and location highlighting.
+  Clicks are snapped to the nearest location (within 50 km by default).
 - **Timeseries Visualization**: Multi-panel timeseries, configurable interactively without code
 - **Map Data Table**: All variable values for the selected location in one table
 - **Additional Data Viewer**: Per-location attributes with auto-selected rendering
@@ -226,14 +227,15 @@ The exact timeseries plotting (variables, colors, overlays, thresholds) is drive
 by a **var config**. You can export it, edit it, and reuse it:
 
 - **In the app:** open the **Config** panel. Use **Download var config** to save the
-  current timeseries setup as a `.json` file (the file is also written into the
-  data's `config/` folder), and **Upload var config** to load a saved one (the
-  plot updates immediately).
-- **Automatic reuse:** `prepare_dataviewer_data` always creates a `config/` folder
-  inside the generated `dataviewer_auto`. Every **Download var config** saves a
-  copy there, and when the viewer loads it **automatically imports the most recent**
-  config from that folder. So you can save a config, exit, and the next time you
-  open the data the same timeseries setup is applied.
+  current timeseries setup as a `.json` file, and **Upload var config** to load a
+  saved one (the plot updates immediately).
+- **Automatic saving:** every **Download var config** click also writes a copy into
+  the data's `config/` folder (`var_config_<timestamp>.json`), so your setup is
+  backed up next to the data — no extra step needed. `prepare_dataviewer_data`
+  always creates this `config/` folder for you.
+- **Automatic loading:** when the viewer starts it **imports the most recent config**
+  from that folder, so a saved setup is automatically applied the next time you
+  open the data.
 - **For a new analysis:** pass a saved `var_specs` list to `create_app` so a fresh
   session starts with the exact same timeseries configuration (this takes
   precedence over the auto-imported config):

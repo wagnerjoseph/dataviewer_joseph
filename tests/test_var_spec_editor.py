@@ -322,3 +322,37 @@ class TestVarSpecEditor:
         expected_overlay = expected_primary | {"add_to", "add_second_axis", "align_zero", "compute_corr"}
         assert overlay_keys == expected_overlay
         assert specs[1]["add_to"] == "var1"
+
+    def test_update_available_variables_keeps_specs(self):
+        """Switching splits updates variables without resetting subplots."""
+        editor = VarSpecEditor(
+            available_variables=["swe", "lai", "swvl1"], on_config_change=lambda: None
+        )
+        editor.add_subplot("swe")
+        editor.add_variable(0, "lai")
+
+        editor.update_available_variables(["swe", "precip"])
+
+        # Subplots survive; still-available names keep their selections
+        assert len(editor._subplots) == 1
+        assert editor._subplots[0]["primary"]["name"].value == "swe"
+        assert editor._subplots[0]["overlays"][0]["name"].value is None
+        assert editor.available_variables == ["swe", "precip"]
+
+        # A variable that disappeared is dropped from the specs
+        editor._subplots[0]["overlays"][0]["name"].value = "precip"
+        specs = editor.to_var_specs()
+        assert len(specs) == 2
+        assert specs[0]["name"] == "swe"
+        assert specs[1]["name"] == "precip"
+        assert specs[1]["add_to"] == "swe"
+
+    def test_add_subplot_after_update_uses_new_variables(self):
+        """New subplots created after a split switch use the new variables."""
+        editor = VarSpecEditor(available_variables=["var1"])
+        editor.add_subplot("var1")
+
+        editor.update_available_variables(["new_var"])
+        editor.add_subplot()
+
+        assert editor._subplots[1]["primary"]["name"].value == "new_var"

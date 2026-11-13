@@ -16,12 +16,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import geoviews as gv
+from cmcrameri import cm as crameri_cm
 from plotting_joseph import plot_map
 import holoviews as hv
 import numpy as np
 import pandas as pd
 import panel as pn
-from cmcrameri import cm as crameri_cm
 
 from .config import DataConfig
 from .data import (
@@ -67,6 +67,11 @@ def _valid_timeseries_specs(specs, data):
 pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
+
+# Bokeh 3.9's WebGL backend renders scatter glyph colors with swapped R/B
+# channels on some GPUs (colorbar and matplotlib downloads stay correct —
+# they do not use WebGL). Force the 2D canvas backend for correct colors.
+hv.renderer("bokeh").webgl = False
 
 
 def _config_timestamp() -> str:
@@ -210,22 +215,13 @@ class DownloadHandler:
                 self._show_error("Map extent could not be determined")
                 return None
 
-            # Match the live map's colormap (including reversal for Sequential)
-            # and color limits (percentile-based; symmetric for Diverging).
-            cmap = _cmap_object(self.cmap_select.value)
-            values = map_data[variable_name].to_numpy()
-            valid = values[~np.isnan(values)]
-            vmin = float(np.percentile(valid, 2)) if len(valid) else None
-            vmax = float(np.percentile(valid, 98)) if len(valid) else None
-
-            if self.gradient_select.value == "Sequential":
-                cmap = cmap.reversed()
-                value_range = (vmin, vmax)
-            elif vmin is None or vmax is None:
-                value_range = None
-            else:
-                max_abs = max(abs(vmin), abs(vmax))
-                value_range = (-max_abs, max_abs)
+            # Match the live map's colors: shared backend selection
+            # (Sequential reversed, percentile ranges; Diverging symmetric).
+            _, cmap, value_range = _gradient_style(
+                self.cmap_select.value,
+                self.gradient_select.value,
+                map_data[variable_name].to_numpy(),
+            )
 
             # Marker for the currently selected location, if any
             selected_location_id = self.state.get("selected_location_id")
@@ -303,13 +299,53 @@ CRAMERI_CMAPS = {
     "Diverging": ["vik", "broc", "cork", "roma"],
 }
 DEFAULT_GRADIENT = "Sequential"
-DEFAULT_CMAP = "batlow"
+DEFAULT_CMAP = "oslo"
 SNAP_DISTANCE_KM = 50.0
 
+_N_PALETTE = 256
 
-def _cmap_object(name: str):
-    """Resolve a Crameri colormap name to its matplotlib colormap object."""
-    return crameri_cm.cmaps[name]
+
+def _cmap_hex_palette(cmap_name: str, reversed_colors: bool = False) -> list[str]:
+    """Sample a Crameri colormap into a list of hex colors (low → high)."""
+    cmap = crameri_cm.cmaps[cmap_name]
+    if reversed_colors:
+        cmap = cmap.reversed()
+    rgba = (cmap(np.linspace(0.0, 1.0, _N_PALETTE))[:, :3] * 255).round().astype(int)
+    return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgba]
+
+
+def _gradient_style(
+    cmap_name: str, gradient_type: str, values: np.ndarray
+) -> tuple[list[str], object, tuple[float, float] | None]:
+    """Backend color selection, shared by the live map and downloads.
+
+    Sequential maps are reversed (high values = dark) and use percentile
+    limits; Diverging maps keep the natural direction with limits symmetric
+    around zero.
+
+    Returns:
+        (palette_hexes, cmap_object, clim) — the palette drives the interactive
+        colorbar/markers, the cmap object drives matplotlib-based downloads,
+        and clim holds the color limits already normalized the same way.
+    """
+    valid = values[~np.isnan(values)]
+    if len(valid) == 0:
+        return [], crameri_cm.cmaps[cmap_name], (None, None)
+    vmin = float(np.percentile(valid, 2))
+    vmax = float(np.percentile(valid, 98))
+    reversed_colors = gradient_type == "Sequential"
+
+    if reversed_colors:
+        clim = (vmin, vmax)
+    else:
+        max_abs = max(abs(vmin), abs(vmax))
+        clim = (-max_abs, max_abs)
+    cmap = crameri_cm.cmaps[cmap_name]
+    return (
+        _cmap_hex_palette(cmap_name, reversed_colors=reversed_colors),
+        cmap.reversed() if reversed_colors else cmap,
+        clim,
+    )
 
 
 def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Column:
@@ -343,7 +379,6 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         "current_variable": None,
         "selected_location_id": None,
         "map_data": None,
-        "highlight_stream": None,
         "location_lookup": None,
         "updating_location_input": False,
         "ts_data": None,
@@ -667,122 +702,23 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             timeseries_pane.clear()
             timeseries_pane.append(timeseries_plot)
 
-    def _make_highlight(
-        location_id: int, map_data: pd.DataFrame, lon_col: str, lat_col: str
-    ) -> hv.Overlay:
-        """Create highlight marker for selected location."""
-        if location_id is None or map_data is None:
-            return hv.Overlay([])
+    def select_location(pos: int, location_id: int):
+        """Select a location: update state, widgets, and load its data."""
+        state["selected_location_id"] = location_id
 
-        row = map_data.loc[map_data[config.id_column] == location_id]
-        if row.empty:
-            return hv.Overlay([])
+        state["updating_location_input"] = True
+        try:
+            location_input.value = location_id
+        finally:
+            state["updating_location_input"] = False
 
-        h_df = pd.DataFrame(
-            {
-                lon_col: [float(row[lon_col].iloc[0])],
-                lat_col: [float(row[lat_col].iloc[0])],
-                config.id_column: [location_id],
-            }
-        )
-
-        # Create a more visible highlight with multiple rings
-        outer_ring = gv.Points(
-            h_df, kdims=[lon_col, lat_col], vdims=[config.id_column]
-        ).opts(
-            size=30,
-            color="red",
-            alpha=0.2,
-            line_color="red",
-            line_width=3,
-            line_alpha=0.5,
-            marker="circle",
-            tools=[],
-        )
-        middle_ring = gv.Points(
-            h_df, kdims=[lon_col, lat_col], vdims=[config.id_column]
-        ).opts(
-            size=20,
-            color="red",
-            alpha=0.3,
-            line_color="red",
-            line_width=2,
-            line_alpha=0.6,
-            marker="circle",
-            tools=[],
-        )
-        inner_dot = gv.Points(
-            h_df, kdims=[lon_col, lat_col], vdims=[config.id_column]
-        ).opts(
-            size=12,
-            color="red",
-            alpha=1.0,
-            line_color="white",
-            line_width=2,
-            marker="circle",
-            tools=[],
-        )
-
-        return outer_ring * middle_ring * inner_dot
-
-    def _auto_clim(values: np.ndarray) -> tuple[float, float]:
-        """Compute automatic color limits (2nd and 98th percentile)."""
-        valid = values[~np.isnan(values)]
-        if len(valid) == 0:
-            return (None, None)
-        return (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
-
-    def _gradient_cmap_and_clim(vmin, vmax):
-        """Return the effective colormap and color limits for the selected gradient type."""
-        cmap = _cmap_object(cmap_select.value)
-        if gradient_select.value == "Sequential":
-            return cmap.reversed(), (vmin, vmax)
-        if vmin is None or vmax is None:
-            return cmap, (None, None)
-        max_abs = max(abs(vmin), abs(vmax))
-        return cmap, (-max_abs, max_abs)
-
-    def create_on_selection_update():
-        """Create a shared selection update callback."""
-
-        def on_selection_update(index):
-            """Update UI elements when selection changes."""
-            map_data = state.get("map_data")
-            if map_data is None or index is None or len(index) == 0:
-                state["selected_location_id"] = None
-                location_input.value = None
-                info_pane.object = ""
-                timeseries_pane.clear()
-                timeseries_pane.append(
-                    pn.pane.Markdown(
-                        "**Click a location on the map to view timeseries**"
-                    )
-                )
-                map_data_table_pane.clear()
-                map_data_table_pane.append(
-                    pn.pane.Markdown("Select a location to view map data")
-                )
-                return
-
-            location_id = int(map_data.iloc[index[0]][config.id_column])
-            state["selected_location_id"] = location_id
-
-            state["updating_location_input"] = True
-            try:
-                location_input.value = location_id
-            finally:
-                state["updating_location_input"] = False
-
-            info_pane.object = f"**Selected Location ID:** `{location_id}`"
-            load_and_display_location_data(location_id)
-
-        return on_selection_update
+        info_pane.object = f"**Selected Location ID:** `{location_id}`"
+        load_and_display_location_data(location_id)
 
     def create_tap_handler(
         map_data: pd.DataFrame,
         lon_col: str,
         lat_col: str,
-        highlight_stream: hv.streams.Stream,
     ):
         """Create a tap callback that snaps map clicks to the nearest location."""
 
@@ -813,7 +749,8 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                     f"**No location within {SNAP_DISTANCE_KM:g} km of click**{suffix}"
                 )
                 return
-            highlight_stream.event(index=[pos])
+            location_id = int(map_data.iloc[pos][config.id_column])
+            select_location(pos, location_id)
 
         return on_tap
 
@@ -850,7 +787,6 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
         try:
             saved_ranges = _saved_view_ranges() if preserve_view else None
-            saved_location_id = state.get("selected_location_id")
 
             map_data = _get_map_data(split_dir, variable_name)
 
@@ -860,8 +796,11 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
             state["map_data"] = map_data
 
-            vmin, vmax = _auto_clim(map_data[variable_name].values)
-            cmap, clim = _gradient_cmap_and_clim(vmin, vmax)
+            palette, _, clim = _gradient_style(
+                cmap_select.value,
+                gradient_select.value,
+                map_data[variable_name].values,
+            )
 
             points = gv.Points(
                 map_data,
@@ -869,8 +808,9 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 vdims=[config.id_column, variable_name],
             ).opts(
                 color=variable_name,
-                cmap=cmap,
-                size=2,
+                cmap=palette,
+                size=5,
+                alpha=0.9,
                 responsive=True,
                 tools=["tap", "hover", "box_zoom", "wheel_zoom", "reset"],
                 colorbar=True,
@@ -886,38 +826,14 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 ],
             )
 
-            highlight_stream = hv.streams.Selection1D(source=points)
-            state["highlight_stream"] = highlight_stream
-
-            if state.get("on_selection_update") is None:
-                state["on_selection_update"] = create_on_selection_update()
-            highlight_stream.add_subscriber(state["on_selection_update"])
-
             # Snap clicks anywhere on the map to the nearest location
             tap_stream = hv.streams.Tap(source=points)
             tap_stream.add_subscriber(
-                create_tap_handler(
-                    map_data, config.lon_col, config.lat_col, highlight_stream
-                )
+                create_tap_handler(map_data, config.lon_col, config.lat_col)
             )
 
-            def update_highlight(index):
-                """Update highlight based on selection."""
-                if index and len(index) > 0:
-                    location_id = int(map_data.iloc[index[0]][config.id_column])
-                    state["selected_location_id"] = location_id
-                    return _make_highlight(
-                        location_id, map_data, config.lon_col, config.lat_col
-                    )
-                state["selected_location_id"] = None
-                return hv.Overlay([])
-
-            highlight_layer = hv.DynamicMap(
-                update_highlight, streams=[highlight_stream]
-            )
-
-            basemap = gv.tile_sources.OSM.opts(alpha=0.6, responsive=True)
-            map_pane.object = basemap * points * highlight_layer
+            basemap = gv.tile_sources.OSM.opts(alpha=0.25, responsive=True)
+            map_pane.object = basemap * points
             download_map_button.disabled = False
 
             # Restore zoom ranges after the pane has re-rendered
@@ -937,19 +853,6 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                         pass
 
                 pn.state.onload(restore_ranges)
-
-            # Restore location selection
-            if saved_location_id is not None:
-                try:
-                    matching = map_data[
-                        map_data[config.id_column] == saved_location_id
-                    ]
-                    if not matching.empty:
-                        highlight_stream.event(
-                            index=[map_data.index.get_loc(matching.index[0])]
-                        )
-                except Exception:
-                    pass
 
         finally:
             loading_indicator.value = False
@@ -1022,13 +925,8 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             )
             return
 
-        state["selected_location_id"] = location_id
-        info_pane.object = f"**Selected Location ID:** `{location_id}`"
-
-        highlight_stream = state.get("highlight_stream")
-        if highlight_stream is not None:
-            pos = state["map_data"].index.get_loc(matching.index[0])
-            highlight_stream.event(index=[pos])
+        pos = state["map_data"].index.get_loc(matching.index[0])
+        select_location(pos, location_id)
 
     # Wire up callbacks
     split_select.param.watch(on_split_change, "value")

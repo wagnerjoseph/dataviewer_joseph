@@ -227,6 +227,21 @@ def _live_extent(map_pane) -> tuple[float, float, float, float] | None:
     return None
 
 
+def _pin_map_figure(fig, extent: tuple[float, float, float, float]) -> None:
+    """Pin a map figure's main axes to the requested lon/lat extent.
+
+    ``plot_map`` sets the axes limits before drawing the selection marker;
+    with global coastlines drawn, the later marker ``plot`` re-autoscales
+    the axes back out to the globe. Re-pinning after the plot is built
+    keeps the downloaded map on the viewer window.
+    """
+    ax = fig.axes[0]
+    lon_min, lon_max, lat_min, lat_max = extent
+    ax.set_xlim(lon_min, lon_max)
+    ax.set_ylim(lat_min, lat_max)
+    ax.autoscale(False)
+
+
 class DownloadHandler:
     """Handler for map and timeseries downloads."""
 
@@ -321,7 +336,7 @@ class DownloadHandler:
             filename = f"map_{split_dir}_{variable_name}_{timestamp}.png"
             tmp_path = Path("/tmp") / filename
 
-            plot_map(
+            fig = plot_map(
                 data=map_data,
                 var=variable_name,
                 master_lookup=str(self.config.lookup_path),
@@ -331,10 +346,16 @@ class DownloadHandler:
                 grid_sampling=0.1,
                 add_coastlines=True,
                 add_marker=add_marker,
-                save_path=str(tmp_path),
                 show_plot=False,
                 dpi=300,
             )
+
+            # plot_map pins the view to ``extent`` up front, but the marker
+            # plotted afterwards can re-autoscale the axes back out to the
+            # coastlines' global extent. Re-pin now that all artists are
+            # drawn, so the download always shows the viewer window.
+            _pin_map_figure(fig, extent)
+            fig.savefig(tmp_path, dpi=300, bbox_inches="tight")
 
             data = tmp_path.read_bytes()
             tmp_path.unlink(missing_ok=True)

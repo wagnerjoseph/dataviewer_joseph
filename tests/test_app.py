@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import panel as pn
 import pytest
-from PIL import Image
 
 from dataviewer_joseph.app import (
     create_app,
@@ -231,7 +230,8 @@ class TestMapInteraction:
         map_data = state["map_data"]
         sel = map_data.iloc[0]
         tap.event(
-            x=float(sel[data_config.lon_col]), y=float(sel[data_config.lat_col])
+            x=float(sel[data_config.lon_col]),
+            y=float(sel[data_config.lat_col]),
         )
         assert state["selected_location_id"] == int(sel[data_config.id_column])
         # Selecting must not reset the window extent.
@@ -245,17 +245,56 @@ class TestMapInteraction:
         out = dl_map.callback()
         assert out is not None
         assert _red_marker_pixels(out) > 0
-        # A regional map (8x8 degrees) is roughly square; a global map is
-        # much wider than tall.
-        img = Image.open(out)
-        w, h = img.size
-        assert h / w > 0.8, "downloaded map is too wide — global extent used"
 
         # Clearing the selection removes the marker from the download.
         tap.event(x=0.0, y=0.0)
         out2 = dl_map.callback()
         assert out2 is not None
         assert _red_marker_pixels(out2) == 0
+
+    def test_download_pins_figure_to_window_extent(self, data_config, monkeypatch):
+        """The download re-pins the figure to the viewer window.
+
+        Regression: ``plot_map`` draws the marker after the axes were pinned,
+        and with global coastlines the marker re-autoscales the axes back out
+        to the globe — the downloaded map then showed the whole world. The
+        app's download pipeline must end with the axes on the window extent.
+        """
+        import dataviewer_joseph.app as appmod
+
+        app, state, map_pane, plot = self._setup(data_config)
+        s = getattr(plot, "state", plot)
+        x1, y1 = _merc(11.0, 46.0)
+        x2, y2 = _merc(19.0, 54.0)
+        s.x_range.start, s.x_range.end = x1, x2
+        s.y_range.start, s.y_range.end = y1, y2
+
+        tap = state["tap_stream"]
+        map_data = state["map_data"]
+        sel = map_data.iloc[0]
+        tap.event(
+            x=float(sel[data_config.lon_col]),
+            y=float(sel[data_config.lat_col]),
+        )
+
+        captured = {}
+        original = appmod.plot_map
+
+        def spy_plot_map(*args, **kwargs):
+            fig = original(*args, **kwargs)
+            captured["fig"] = fig
+            captured["extent"] = kwargs.get("extent")
+            return fig
+
+        monkeypatch.setattr(appmod, "plot_map", spy_plot_map)
+
+        dl_map = _find(app, pn.widgets.FileDownload, name="Download Map")
+        assert dl_map.callback() is not None
+        assert captured.get("fig") is not None
+        assert captured["extent"] == pytest.approx((11.0, 19.0, 46.0, 54.0), abs=0.1)
+        ax = captured["fig"].axes[0]
+        assert tuple(ax.get_xlim()) == pytest.approx((11.0, 19.0), abs=0.1)
+        assert tuple(ax.get_ylim()) == pytest.approx((46.0, 54.0), abs=0.1)
 
 
 def _red_marker_pixels(fileobj: io.BytesIO) -> int:

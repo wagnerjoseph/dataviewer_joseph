@@ -263,3 +263,78 @@ class TestAddDynamicSizing:
         assert fixed.glyph.size == 30
         assert dynamic.glyph.size != orig_dynamic
 
+    def test_rapid_range_changes_are_throttled(self, monkeypatch):
+        """Range events per frame must not patch glyph sizes per event.
+
+        Regression: applying sizes synchronously on every range event pushes
+        a model patch to the browser per frame; each patch forces a full
+        canvas redraw, so a drag/zoom re-renders constantly (slow and janky
+        with many points).
+        """
+        from bokeh.models import Scatter
+
+        import dataviewer_joseph.plotting.maps as maps_mod
+
+        clock = {"t": 1000.0}
+
+        class FakeTime:
+            @staticmethod
+            def time():
+                return clock["t"]
+
+        monkeypatch.setattr(maps_mod, "time", FakeTime)
+
+        fig = self._render_points([add_dynamic_sizing])
+        renderer = [
+            r
+            for r in fig.renderers
+            if hasattr(r, "glyph") and isinstance(r.glyph, Scatter)
+        ][0]
+
+        mutations = []
+        renderer.glyph.on_change(
+            "size", lambda attr, old, new: mutations.append(new)
+        )
+
+        # Fire range changes like a continuous drag/zoom (a pair of sets per
+        # frame, ~0.1 s apart). Each frame computes a *different* size, so a
+        # non-throttled implementation would mutate the glyph once per event
+        # (9 events → 9 patches); the throttle allows one per apply-window.
+        x = fig.x_range
+        center = (x.start + x.end) / 2
+        width = x.end - x.start
+
+        def set_extent(w):
+            x.start = center - w / 2
+            x.end = center + w / 2
+
+        # Frame A: the first set applies (size stays clamped at 50 → no
+        # mutation) and consumes the apply-window; the second set is
+        # throttled.
+        clock["t"] = 1000.0
+        set_extent(width * 4)
+        # Frame B, only 0.1 s later: both sets would change the size (≈20.7),
+        # but the throttle must skip them too.
+        clock["t"] = 1000.1
+        set_extent(width * 8)
+        assert len(mutations) == 0
+
+        # Frame C, 0.3 s later: exactly one apply (per-frame pair of sets
+        # shares one timestamp).
+        clock["t"] = 1000.4
+        set_extent(width * 16)
+        assert len(mutations) == 1
+
+        # Frames D and E: one apply per elapsed window.
+        clock["t"] = 1000.8
+        set_extent(width * 32)
+        assert len(mutations) == 2
+
+        clock["t"] = 1001.2
+        x.end = center + width * 32
+        assert len(mutations) == 3
+
+        extent_km = (x.end - x.start) / 1000
+        expected = round(max(1.0, min(50.0, (10_000 / extent_km) ** 1.2)), 1)
+        assert renderer.glyph.size == expected
+

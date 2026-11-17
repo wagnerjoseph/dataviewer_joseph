@@ -90,7 +90,12 @@ def add_dynamic_sizing(
     ``_dataviewer_fixed_size`` (e.g. the selected-location marker) keep
     their size. Both axes are watched (a zoom can change only one range)
     and the applied size is re-resolved on every update, so no callback can
-    hold a stale renderer.
+    hold a stale renderer. Sizes are applied at most every
+    ``ZOOM_APPLY_INTERVAL_S`` seconds: a drag/zoom fires one range event
+    per frame, and a synchronous resize per event would push a model patch
+    to the browser per frame, each forcing a full canvas redraw — slow and
+    janky with many points. The ``on_extent_change`` callback still runs on
+    every event (pure computation, keeps downloads in sync with the view).
 
     Args:
         plot: The HoloViews/Bokeh plot (``.state`` is the bokeh figure)
@@ -123,7 +128,10 @@ def add_dynamic_sizing(
         extent = (x_end - x_start) / 1000
         size = (10_000 / extent) ** 1.2
         result = max(1.0, min(50.0, size))
-        return result if math.isfinite(result) else None
+        # Round away float noise: pan updates can wobble the extent in the
+        # last bits, which would toggle the size and patch the model every
+        # frame. At most ~7 size steps/decade is plenty visually.
+        return round(result, 1) if math.isfinite(result) else None
 
     def apply_zoom() -> None:
         """Apply the size for the current range to every sized glyph."""
@@ -158,17 +166,22 @@ def add_dynamic_sizing(
         except Exception:
             return None
 
+    ZOOM_APPLY_INTERVAL_S = 0.15
+
     def update_size(attr: str, old: Any, new: Any) -> None:
-        """Apply the size + extent on every range change."""
+        """Throttled size/extent update on every range change."""
         plot.state._last_zoom_time = time.time()
         if on_extent_change is not None:
             try:
                 on_extent_change(current_extent())
             except Exception:
                 pass
-        apply_zoom()
+        if time.time() - plot.state._last_apply_time >= ZOOM_APPLY_INTERVAL_S:
+            plot.state._last_apply_time = time.time()
+            apply_zoom()
 
     plot.state._last_zoom_time = 0.0
+    plot.state._last_apply_time = 0.0
 
     for rng in (plot.state.x_range, plot.state.y_range):
         for attr in ("start", "end"):

@@ -204,11 +204,22 @@ class TestAddDynamicSizing:
         assert len(sizes) >= 2
         assert all(abs(s - sizes[0]) < 1e-9 for s in sizes)
 
-    def test_fixed_size_renderers_are_untouched(self):
+    def test_fixed_size_renderers_are_untouched(self, monkeypatch):
         """Renderers tagged ``_dataviewer_fixed_size`` keep their size."""
         from bokeh.models import Scatter
         import geoviews as gv
         import holoviews as hv
+
+        import dataviewer_joseph.plotting.maps as maps_mod
+
+        clock = {"t": 1000.0}
+
+        class FakeTime:
+            @staticmethod
+            def time():
+                return clock["t"]
+
+        monkeypatch.setattr(maps_mod, "time", FakeTime)
 
         hv.extension("bokeh")
         hv.renderer("bokeh").webgl = False
@@ -254,22 +265,25 @@ class TestAddDynamicSizing:
         dynamic = next(r for r in renderers if not getattr(r, "_dataviewer_fixed_size", False))
         assert fixed.glyph.size == 30
 
-        # Change the range; the dynamic renderer resizes, the fixed one does not.
+        # Change the range; after the debounce the dynamic renderer resizes,
+        # the fixed one does not.
         orig_dynamic = dynamic.glyph.size
         x = fig.x_range
         width = x.end - x.start
         x.start = x.start - width * 3
         x.end = x.end + width * 3
+        clock["t"] += 0.5
+        fig._dv_sizer_flush()
         assert fixed.glyph.size == 30
         assert dynamic.glyph.size != orig_dynamic
 
-    def test_rapid_range_changes_are_throttled(self, monkeypatch):
-        """Range events per frame must not patch glyph sizes per event.
+    def test_range_changes_debounce_size_update(self, monkeypatch):
+        """A drag/zoom must not resize points mid-gesture; one apply at pause.
 
-        Regression: applying sizes synchronously on every range event pushes
-        a model patch to the browser per frame; each patch forces a full
-        canvas redraw, so a drag/zoom re-renders constantly (slow and janky
-        with many points).
+        Regression: sizes were mutated on every range event, pushing a model
+        patch to the browser per frame; each patch forces a full canvas
+        redraw, so a drag/zoom re-rendered constantly (slow and janky with
+        many points).
         """
         from bokeh.models import Scatter
 
@@ -296,43 +310,32 @@ class TestAddDynamicSizing:
             "size", lambda attr, old, new: mutations.append(new)
         )
 
-        # Fire range changes like a continuous drag/zoom (a pair of sets per
-        # frame, ~0.1 s apart). Each frame computes a *different* size, so a
-        # non-throttled implementation would mutate the glyph once per event
-        # (9 events → 9 patches); the throttle allows one per apply-window.
+        # Continuous drag/zoom: many events per second, each would compute a
+        # different size, but nothing may be applied mid-gesture.
         x = fig.x_range
         center = (x.start + x.end) / 2
         width = x.end - x.start
 
-        def set_extent(w):
+        def set_extent(factor):
+            w = width * factor
             x.start = center - w / 2
             x.end = center + w / 2
 
-        # Frame A: the first set applies (size stays clamped at 50 → no
-        # mutation) and consumes the apply-window; the second set is
-        # throttled.
-        clock["t"] = 1000.0
-        set_extent(width * 4)
-        # Frame B, only 0.1 s later: both sets would change the size (≈20.7),
-        # but the throttle must skip them too.
-        clock["t"] = 1000.1
-        set_extent(width * 8)
+        for i in range(8):
+            clock["t"] += 0.01
+            set_extent(2 ** (i + 2))
+        assert len(mutations) == 0
+        assert renderer.visible is True
+
+        # Even a flush inside the debounce window must not apply.
+        fig._dv_sizer_flush()
         assert len(mutations) == 0
 
-        # Frame C, 0.3 s later: exactly one apply (per-frame pair of sets
-        # shares one timestamp).
-        clock["t"] = 1000.4
-        set_extent(width * 16)
+        # Once the view has been idle >= the debounce, exactly one apply.
+        clock["t"] += 0.5
+        fig._dv_sizer_flush()
         assert len(mutations) == 1
-
-        # Frames D and E: one apply per elapsed window.
-        clock["t"] = 1000.8
-        set_extent(width * 32)
-        assert len(mutations) == 2
-
-        clock["t"] = 1001.2
-        x.end = center + width * 32
-        assert len(mutations) == 3
+        assert renderer.visible is True
 
         extent_km = (x.end - x.start) / 1000
         expected = round(max(1.0, min(50.0, (10_000 / extent_km) ** 1.2)), 1)

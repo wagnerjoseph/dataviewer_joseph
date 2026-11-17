@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 EARTH_RADIUS_KM = 6371.0
 
+# How long the view must be idle after the last range event before the
+# zoom-adaptive point size is applied (trailing debounce).
+ZOOM_DEBOUNCE_MS = 300
+
 
 def web_mercator_to_latlon(x: float, y: float) -> tuple[float, float]:
     """Convert Web Mercator (meters) to lat/lon (degrees)."""
@@ -90,12 +94,13 @@ def add_dynamic_sizing(
     ``_dataviewer_fixed_size`` (e.g. the selected-location marker) keep
     their size. Both axes are watched (a zoom can change only one range)
     and the applied size is re-resolved on every update, so no callback can
-    hold a stale renderer. Sizes are applied at most every
-    ``ZOOM_APPLY_INTERVAL_S`` seconds: a drag/zoom fires one range event
-    per frame, and a synchronous resize per event would push a model patch
-    to the browser per frame, each forcing a full canvas redraw — slow and
-    janky with many points. The ``on_extent_change`` callback still runs on
-    every event (pure computation, keeps downloads in sync with the view).
+    hold a stale renderer. Sizes are applied with a ``ZOOM_DEBOUNCE_MS``
+    trailing debounce: a drag/zoom fires one range event per frame, and
+    each event cancels and reschedules the single pending apply, so the
+    glyphs stay completely untouched during the gesture and are resized
+    exactly once, once the view has been idle for the debounce period.
+    The ``on_extent_change`` callback still runs on every event (pure
+    computation, keeps downloads in sync with the view).
 
     Args:
         plot: The HoloViews/Bokeh plot (``.state`` is the bokeh figure)
@@ -166,22 +171,53 @@ def add_dynamic_sizing(
         except Exception:
             return None
 
-    ZOOM_APPLY_INTERVAL_S = 0.15
+    def _schedule_apply(delay_ms: float) -> None:
+        """(Re)schedule the single post-interaction apply on the document.
+
+        Each range event cancels the previous timer and starts a new one,
+        so during a continuous drag/zoom nothing is applied at all — the
+        glyphs are only touched once the view has been idle.
+        """
+        doc = plot.document or getattr(plot.state, "document", None)
+        if doc is None:
+            return  # No bokeh document (e.g. unit tests): flush is tested directly.
+        try:
+            handle = getattr(plot.state, "_dv_timeout_handle", None)
+            if handle is not None:
+                try:
+                    doc.remove_timeout_callback(handle)
+                except Exception:
+                    pass
+            plot.state._dv_timeout_handle = doc.add_timeout_callback(
+                apply_when_idle, max(1, int(round(delay_ms)))
+            )
+        except Exception:
+            pass
+
+    def apply_when_idle() -> None:
+        """Debounced apply: only touch glyphs once idle for ``ZOOM_DEBOUNCE_MS``."""
+        try:
+            idle_ms = (time.time() - plot.state._last_zoom_time) * 1000.0
+            if idle_ms < ZOOM_DEBOUNCE_MS:
+                _schedule_apply(ZOOM_DEBOUNCE_MS - idle_ms)
+                return
+            apply_zoom()
+        except Exception:
+            pass
 
     def update_size(attr: str, old: Any, new: Any) -> None:
-        """Throttled size/extent update on every range change."""
+        """Record the event; the size is applied once the view settles."""
         plot.state._last_zoom_time = time.time()
         if on_extent_change is not None:
             try:
                 on_extent_change(current_extent())
             except Exception:
                 pass
-        if time.time() - plot.state._last_apply_time >= ZOOM_APPLY_INTERVAL_S:
-            plot.state._last_apply_time = time.time()
-            apply_zoom()
+        _schedule_apply(ZOOM_DEBOUNCE_MS)
 
     plot.state._last_zoom_time = 0.0
-    plot.state._last_apply_time = 0.0
+    # Exposed so tests can fire the debounced apply deterministically.
+    plot.state._dv_sizer_flush = apply_when_idle
 
     for rng in (plot.state.x_range, plot.state.y_range):
         for attr in ("start", "end"):

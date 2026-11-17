@@ -93,10 +93,11 @@ pn.extension()
 hv.extension("bokeh")
 gv.extension("bokeh")
 
-# Bokeh 3.9's WebGL backend renders scatter glyph colors with swapped R/B
-# channels on some GPUs (colorbar and matplotlib downloads stay correct —
-# they do not use WebGL). Force the 2D canvas backend for correct colors.
-hv.renderer("bokeh").webgl = False
+# GPU (WebGL) rendering keeps the map interactive with large point counts:
+# while dragging/zooming bokeh redraws the whole point cloud every frame,
+# which the 2D canvas backend cannot do cheaply. Downloads and the colorbar
+# are matplotlib-based and are unaffected by the browser renderer.
+hv.renderer("bokeh").webgl = True
 
 
 def _config_timestamp() -> str:

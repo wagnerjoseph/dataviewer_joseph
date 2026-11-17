@@ -293,10 +293,10 @@ class DownloadHandler:
                 self._show_error("No data available for download")
                 return None
 
-            # Current dataviewer extent: the zoom recorded by the restore
-            # step (matches what the user sees), falling back to the live
-            # plot for the plain zoom case.
-            extent = self.state.get("map_zoom") or self._read_live_extent()
+            # Current dataviewer extent: always the window currently shown
+            # in the viewer. The live plot ranges are authoritative; the
+            # recorded map_zoom is only a fallback (e.g. no live plot yet).
+            extent = self._read_live_extent() or self.state.get("map_zoom")
             if extent is None:
                 self._show_error("Map extent could not be determined")
                 return None
@@ -958,23 +958,8 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 ],
             )
 
-            def update_marker(location_id=None, **_):
-                """Marker overlay for the selected location (or nothing)."""
-                map_data_for_marker = state.get("map_data")
-                if location_id is None or map_data_for_marker is None:
-                    return hv.Overlay([])
-                row = map_data_for_marker[
-                    map_data_for_marker[config.id_column] == location_id
-                ]
-                if row.empty:
-                    return hv.Overlay([])
-                h_df = pd.DataFrame(
-                    {
-                        config.lon_col: [float(row[config.lon_col].iloc[0])],
-                        config.lat_col: [float(row[config.lat_col].iloc[0])],
-                        config.id_column: [int(location_id)],
-                    }
-                )
+            def _marker_rings(marker_df):
+                """The three ring Points of the selection marker."""
                 rings = []
                 for ring_size, fill_alpha, line_width, line_alpha, line_color in (
                     (30, 0.2, 3, 0.5, "red"),
@@ -983,7 +968,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 ):
                     rings.append(
                         gv.Points(
-                            h_df,
+                            marker_df,
                             kdims=[config.lon_col, config.lat_col],
                             vdims=[config.id_column],
                         ).opts(
@@ -999,6 +984,36 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                         )
                     )
                 return hv.Overlay(rings, group="SelectedMarker")
+
+            empty_marker_df = pd.DataFrame(
+                columns=[config.lon_col, config.lat_col, config.id_column],
+                dtype=float,
+            )
+
+            def update_marker(location_id=None, **_):
+                """Marker overlay for the selected location (or empty rings).
+
+                The frame type never changes (always an overlay of three
+                Points): if it jumped between an empty overlay and a Points
+                overlay, HoloViews would rebuild the bokeh figure and reset
+                the zoom/pan to the global autofit.
+                """
+                map_data_for_marker = state.get("map_data")
+                if location_id is None or map_data_for_marker is None:
+                    return _marker_rings(empty_marker_df)
+                row = map_data_for_marker[
+                    map_data_for_marker[config.id_column] == location_id
+                ]
+                if row.empty:
+                    return _marker_rings(empty_marker_df)
+                h_df = pd.DataFrame(
+                    {
+                        config.lon_col: [float(row[config.lon_col].iloc[0])],
+                        config.lat_col: [float(row[config.lat_col].iloc[0])],
+                        config.id_column: [int(location_id)],
+                    }
+                )
+                return _marker_rings(h_df)
 
             selection_stream = SelectedLocationStream(
                 location_id=state.get("selected_location_id")

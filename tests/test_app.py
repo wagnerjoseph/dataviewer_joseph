@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import panel as pn
 import pytest
+from PIL import Image
 
 from dataviewer_joseph.app import (
     create_app,
@@ -209,7 +210,7 @@ class TestMapInteraction:
         assert ts_button.disabled is True
 
     def test_download_uses_live_extent_and_selection_marker(self, data_config):
-        """The downloaded map matches the zoomed extent and the selection."""
+        """The downloaded map matches the window, even with a marked point."""
         app, state, map_pane, plot = self._setup(data_config)
         s = getattr(plot, "state", plot)
 
@@ -233,12 +234,22 @@ class TestMapInteraction:
             x=float(sel[data_config.lon_col]), y=float(sel[data_config.lat_col])
         )
         assert state["selected_location_id"] == int(sel[data_config.id_column])
+        # Selecting must not reset the window extent.
+        assert state["map_zoom"][0] == pytest.approx(11.0, abs=0.01)
+
+        # Corrupt the recorded zoom (regression: a stale/global map_zoom must
+        # not win) — the window in the viewer is the extent.
+        state["map_zoom"] = (-180.0, 180.0, -60.0, 85.0)
 
         dl_map = _find(app, pn.widgets.FileDownload, name="Download Map")
         out = dl_map.callback()
         assert out is not None
-        red = _red_marker_pixels(out)
-        assert red > 0, "selected location must be marked on the download"
+        assert _red_marker_pixels(out) > 0
+        # A regional map (8x8 degrees) is roughly square; a global map is
+        # much wider than tall.
+        img = Image.open(out)
+        w, h = img.size
+        assert h / w > 0.8, "downloaded map is too wide — global extent used"
 
         # Clearing the selection removes the marker from the download.
         tap.event(x=0.0, y=0.0)

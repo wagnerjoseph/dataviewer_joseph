@@ -242,6 +242,33 @@ def _pin_map_figure(fig, extent: tuple[float, float, float, float]) -> None:
     ax.autoscale(False)
 
 
+def _square_extent(extent: tuple[float, float, float, float]):
+    """Expand a window extent to equal lon/lat degree spans (centered).
+
+    The download should show as many degrees in latitude as in longitude,
+    so a wide browser viewport does not stretch/squash the map (the aspect
+    must not change between variables). The span with fewer degrees is
+    grown symmetrically around the window; the result still contains the
+    original window, so any selected marker stays visible.
+    """
+    lon_min, lon_max, lat_min, lat_max = extent
+    lon_span = lon_max - lon_min
+    lat_span = lat_max - lat_min
+    if abs(lon_span - lat_span) < 1e-9:
+        return extent
+    if lon_span > lat_span:
+        pad = (lon_span - lat_span) / 2.0
+        lat_min, lat_max = lat_min - pad, lat_max + pad
+    else:
+        pad = (lat_span - lon_span) / 2.0
+        lon_min, lon_max = lon_min - pad, lon_max + pad
+    lon_min = max(float(lon_min), -180.0)
+    lon_max = min(float(lon_max), 180.0)
+    lat_min = max(float(lat_min), -89.0)
+    lat_max = min(float(lat_max), 89.0)
+    return (lon_min, lon_max, lat_min, lat_max)
+
+
 class DownloadHandler:
     """Handler for map and timeseries downloads."""
 
@@ -312,6 +339,9 @@ class DownloadHandler:
             # in the viewer. The live plot ranges are authoritative; the
             # recorded map_zoom is only a fallback (e.g. no live plot yet).
             extent = self._read_live_extent() or self.state.get("map_zoom")
+            # Equal degrees in lat and lon: a narrow/tall window would
+            # otherwise stretch the map differently per variable.
+            extent = _square_extent(extent)
             if extent is None:
                 self._show_error("Map extent could not be determined")
                 return None
@@ -1054,8 +1084,9 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             download_map_button.disabled = False
 
             # Restore zoom ranges after the pane has re-rendered. Panel swaps
-            # the plot model asynchronously, so run the restore after the swap
-            # instead of onload.
+            # the plot model asynchronously, so run the restore after the
+            # swap — repeatedly, because the first attempt can still hit the
+            # old model and the swap itself can reset the ranges.
             if saved_ranges:
 
                 def restore_ranges():
@@ -1076,11 +1107,25 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                     except Exception:
                         pass
 
+                def apply_restore():
+                    restore_ranges()
+                    doc = pn.state.curdoc
+                    if doc is None:
+                        return
+                    # Re-apply after the model swap propagates; the last call
+                    # wins, so even if an earlier attempt targeted the old
+                    # figure, the new one ends up with the user's ranges.
+                    for delay in (200, 600):
+                        try:
+                            doc.add_timeout_callback(restore_ranges, delay)
+                        except Exception:
+                            break
+
                 doc = pn.state.curdoc
                 if doc is not None and doc.session_context is not None:
-                    pn.state.execute(restore_ranges, schedule=True)
+                    pn.state.execute(apply_restore, schedule=True)
                 else:
-                    pn.state.onload(restore_ranges)
+                    pn.state.onload(apply_restore)
 
         finally:
             loading_indicator.value = False

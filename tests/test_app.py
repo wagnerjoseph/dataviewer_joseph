@@ -253,19 +253,20 @@ class TestMapInteraction:
         assert _red_marker_pixels(out2) == 0
 
     def test_download_pins_figure_to_window_extent(self, data_config, monkeypatch):
-        """The download re-pins the figure to the viewer window.
+        """The download re-pins the figure to the (squared) window extent.
 
         Regression: ``plot_map`` draws the marker after the axes were pinned,
         and with global coastlines the marker re-autoscales the axes back out
         to the globe — the downloaded map then showed the whole world. The
-        app's download pipeline must end with the axes on the window extent.
+        download pipeline must end with the axes on the window extent, with
+        as many degrees in latitude as in longitude.
         """
         import dataviewer_joseph.app as appmod
 
         app, state, map_pane, plot = self._setup(data_config)
         s = getattr(plot, "state", plot)
-        x1, y1 = _merc(11.0, 46.0)
-        x2, y2 = _merc(19.0, 54.0)
+        x1, y1 = _merc(11.0, 47.0)
+        x2, y2 = _merc(19.0, 51.0)
         s.x_range.start, s.x_range.end = x1, x2
         s.y_range.start, s.y_range.end = y1, y2
 
@@ -291,10 +292,33 @@ class TestMapInteraction:
         dl_map = _find(app, pn.widgets.FileDownload, name="Download Map")
         assert dl_map.callback() is not None
         assert captured.get("fig") is not None
-        assert captured["extent"] == pytest.approx((11.0, 19.0, 46.0, 54.0), abs=0.1)
+        # Viewport: 8 degrees lon x 4 degrees lat -> squared to 8 x 8.
+        assert captured["extent"] == pytest.approx(
+            (11.0, 19.0, 45.0, 53.0), abs=0.1
+        )
         ax = captured["fig"].axes[0]
         assert tuple(ax.get_xlim()) == pytest.approx((11.0, 19.0), abs=0.1)
-        assert tuple(ax.get_ylim()) == pytest.approx((46.0, 54.0), abs=0.1)
+        assert tuple(ax.get_ylim()) == pytest.approx((45.0, 53.0), abs=0.1)
+
+    def test_square_extent(self):
+        """Extents with uneven lat/lon spans are expanded to equal degrees."""
+        from dataviewer_joseph.app import _square_extent
+
+        # Wide window: lat is grown symmetrically around the window.
+        assert _square_extent((10.0, 20.0, 46.0, 48.0)) == pytest.approx(
+            (10.0, 20.0, 42.0, 52.0)
+        )
+        # Tall window: lon is grown symmetrically around the window.
+        assert _square_extent((10.0, 12.0, 40.0, 45.0)) == pytest.approx(
+            (8.5, 13.5, 40.0, 45.0)
+        )
+        # Already square: unchanged.
+        assert _square_extent((10.0, 20.0, 45.0, 55.0)) == pytest.approx(
+            (10.0, 20.0, 45.0, 55.0)
+        )
+        # Near the poles the lat span is clamped.
+        lat_min, lat_max = _square_extent((0.0, 180.0, 60.0, 70.0))[2:]
+        assert lat_max <= 89.0
 
 
 def _red_marker_pixels(fileobj: io.BytesIO) -> int:

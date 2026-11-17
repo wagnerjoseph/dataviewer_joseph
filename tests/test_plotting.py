@@ -341,3 +341,41 @@ class TestAddDynamicSizing:
         expected = round(max(1.0, min(50.0, (10_000 / extent_km) ** 1.2)), 1)
         assert renderer.glyph.size == expected
 
+    def test_frame_aspect_matches_degree_ratio(self, monkeypatch):
+        """The live frame keeps equal degrees per pixel (like downloads).
+
+        ``match_aspect`` alone would use the Web Mercator meter ratio; the
+        frame aspect must instead equal the lon/lat spans in degrees.
+        """
+        import dataviewer_joseph.plotting.maps as maps_mod
+
+        clock = {"t": 1000.0}
+
+        class FakeTime:
+            @staticmethod
+            def time():
+                return clock["t"]
+
+        monkeypatch.setattr(maps_mod, "time", FakeTime)
+
+        fig = self._render_points([add_dynamic_sizing])
+
+        def degree_ratio(s):
+            lat_min, lon_min = maps_mod.web_mercator_to_latlon(
+                s.x_range.start, s.y_range.start
+            )
+            lat_max, lon_max = maps_mod.web_mercator_to_latlon(
+                s.x_range.end, s.y_range.end
+            )
+            return (lon_max - lon_min) / (lat_max - lat_min)
+
+        assert fig.aspect_ratio == pytest.approx(degree_ratio(fig), rel=1e-6)
+
+        # After a zoom (debounced), the ratio follows the new lat/lon spans.
+        x = fig.x_range
+        x.start = x.start - (x.end - x.start) * 2
+        x.end = x.end + (x.end - x.start) * 2
+        clock["t"] += 0.5
+        fig._dv_sizer_flush()
+        assert fig.aspect_ratio == pytest.approx(degree_ratio(fig), rel=1e-6)
+

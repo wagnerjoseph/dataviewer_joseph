@@ -186,6 +186,23 @@ class TestMapInteraction:
         map_pane._get_model(doc)
         return app, state, map_pane, _live_bokeh_plot(map_pane)
 
+    def test_live_map_matches_aspect(self, data_config):
+        """The live map keeps the download's proportions (equal degrees)."""
+        from dataviewer_joseph.plotting.maps import web_mercator_to_latlon
+
+        app, state, map_pane, plot = self._setup(data_config)
+        assert plot is not None
+        assert plot.state.match_aspect is True
+
+        # Frame aspect = current lon span / lat span (degrees) — the same
+        # proportions the downloaded map uses. (match_aspect alone would use
+        # the Web Mercator meter ratio, which is wider away from the equator.)
+        s = plot.state
+        lat_min, lon_min = web_mercator_to_latlon(s.x_range.start, s.y_range.start)
+        lat_max, lon_max = web_mercator_to_latlon(s.x_range.end, s.y_range.end)
+        expected = (lon_max - lon_min) / (lat_max - lat_min)
+        assert plot.state.aspect_ratio == pytest.approx(expected, rel=1e-6)
+
     def test_click_marks_selection_empty_click_clears(self, data_config):
         """A click snaps to a location; a click far from any point clears."""
         app, state, map_pane, plot = self._setup(data_config)
@@ -253,13 +270,12 @@ class TestMapInteraction:
         assert _red_marker_pixels(out2) == 0
 
     def test_download_pins_figure_to_window_extent(self, data_config, monkeypatch):
-        """The download re-pins the figure to the (squared) window extent.
+        """The download re-pins the figure to the exact viewer window.
 
         Regression: ``plot_map`` draws the marker after the axes were pinned,
         and with global coastlines the marker re-autoscales the axes back out
         to the globe — the downloaded map then showed the whole world. The
-        download pipeline must end with the axes on the window extent, with
-        as many degrees in latitude as in longitude.
+        download pipeline must end with the axes on the viewer window extent.
         """
         import dataviewer_joseph.app as appmod
 
@@ -292,33 +308,13 @@ class TestMapInteraction:
         dl_map = _find(app, pn.widgets.FileDownload, name="Download Map")
         assert dl_map.callback() is not None
         assert captured.get("fig") is not None
-        # Viewport: 8 degrees lon x 4 degrees lat -> squared to 8 x 8.
+        # The download uses the exact viewer window: 8 degrees lon x 4 deg lat.
         assert captured["extent"] == pytest.approx(
-            (11.0, 19.0, 45.0, 53.0), abs=0.1
+            (11.0, 19.0, 47.0, 51.0), abs=0.1
         )
         ax = captured["fig"].axes[0]
         assert tuple(ax.get_xlim()) == pytest.approx((11.0, 19.0), abs=0.1)
-        assert tuple(ax.get_ylim()) == pytest.approx((45.0, 53.0), abs=0.1)
-
-    def test_square_extent(self):
-        """Extents with uneven lat/lon spans are expanded to equal degrees."""
-        from dataviewer_joseph.app import _square_extent
-
-        # Wide window: lat is grown symmetrically around the window.
-        assert _square_extent((10.0, 20.0, 46.0, 48.0)) == pytest.approx(
-            (10.0, 20.0, 42.0, 52.0)
-        )
-        # Tall window: lon is grown symmetrically around the window.
-        assert _square_extent((10.0, 12.0, 40.0, 45.0)) == pytest.approx(
-            (8.5, 13.5, 40.0, 45.0)
-        )
-        # Already square: unchanged.
-        assert _square_extent((10.0, 20.0, 45.0, 55.0)) == pytest.approx(
-            (10.0, 20.0, 45.0, 55.0)
-        )
-        # Near the poles the lat span is clamped.
-        lat_min, lat_max = _square_extent((0.0, 180.0, 60.0, 70.0))[2:]
-        assert lat_max <= 89.0
+        assert tuple(ax.get_ylim()) == pytest.approx((47.0, 51.0), abs=0.1)
 
 
 def _red_marker_pixels(fileobj: io.BytesIO) -> int:

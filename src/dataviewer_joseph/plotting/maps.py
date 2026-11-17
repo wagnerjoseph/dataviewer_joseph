@@ -124,36 +124,6 @@ def add_dynamic_sizing(
                 out.append(r)
         return out
 
-    def desired_size() -> float | None:
-        """Point size matching the current x-range extent (km)."""
-        x_start = plot.state.x_range.start
-        x_end = plot.state.x_range.end
-        if None in (x_start, x_end):
-            return None
-        extent = (x_end - x_start) / 1000
-        size = (10_000 / extent) ** 1.2
-        result = max(1.0, min(50.0, size))
-        # Round away float noise: pan updates can wobble the extent in the
-        # last bits, which would toggle the size and patch the model every
-        # frame. At most ~7 size steps/decade is plenty visually.
-        return round(result, 1) if math.isfinite(result) else None
-
-    def apply_zoom() -> None:
-        """Apply the size for the current range to every sized glyph."""
-        try:
-            size = desired_size()
-            if size is None:
-                return
-            for renderer in scatters():
-                for name in ("glyph", "selection_glyph", "nonselection_glyph", "hover_glyph", "muted_glyph"):
-                    glyph = getattr(renderer, name, None)
-                    if glyph is not None and hasattr(glyph, "size"):
-                        current = getattr(glyph, "size", None)
-                        if current != size:
-                            glyph.size = size
-        except Exception:
-            pass
-
     def current_extent() -> tuple[float, float, float, float] | None:
         """Current extent as ``(lon_min, lon_max, lat_min, lat_max)``."""
         try:
@@ -170,6 +140,51 @@ def add_dynamic_sizing(
             return (lon_min, lon_max, lat_min, lat_max)
         except Exception:
             return None
+
+    def desired_size() -> float | None:
+        """Point size matching the current x-range extent (km)."""
+        x_start = plot.state.x_range.start
+        x_end = plot.state.x_range.end
+        if None in (x_start, x_end):
+            return None
+        extent = (x_end - x_start) / 1000
+        size = (10_000 / extent) ** 1.2
+        result = max(1.0, min(50.0, size))
+        # Round away float noise: pan updates can wobble the extent in the
+        # last bits, which would toggle the size and patch the model every
+        # frame. At most ~7 size steps/decade is plenty visually.
+        return round(result, 1) if math.isfinite(result) else None
+
+    def apply_zoom() -> None:
+        """Apply the size and frame aspect for the current range.
+
+        The frame is kept at equal degrees per pixel (lon span / lat span in
+        degrees), the same proportions as the downloaded map: Bokeh's
+        ``match_aspect`` alone uses the data-unit (Web Mercator meters) ratio,
+        which is wider than the degree ratio away from the equator.
+        """
+        try:
+            size = desired_size()
+            if size is None:
+                return
+            for renderer in scatters():
+                for name in ("glyph", "selection_glyph", "nonselection_glyph", "hover_glyph", "muted_glyph"):
+                    glyph = getattr(renderer, name, None)
+                    if glyph is not None and hasattr(glyph, "size"):
+                        current = getattr(glyph, "size", None)
+                        if current != size:
+                            glyph.size = size
+            extent = current_extent()
+            if extent is not None:
+                lon_min, lon_max, lat_min, lat_max = extent
+                lon_span = lon_max - lon_min
+                lat_span = lat_max - lat_min
+                if lon_span > 0 and lat_span > 0:
+                    ratio = max(0.05, min(20.0, lon_span / lat_span))
+                    if getattr(plot.state, "aspect_ratio", None) != ratio:
+                        plot.state.aspect_ratio = ratio
+        except Exception:
+            pass
 
     def _schedule_apply(delay_ms: float) -> None:
         """(Re)schedule the single post-interaction apply on the document.

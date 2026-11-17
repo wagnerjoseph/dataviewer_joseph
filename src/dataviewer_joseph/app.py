@@ -71,6 +71,21 @@ def _tag_marker_renderer(plot: Any, element: Any) -> None:
         renderer._dataviewer_fixed_size = True
 
 
+def _match_map_aspect(plot: Any, element: Any) -> None:
+    """Keep the live map's geographic proportions (equal m/m axis scales).
+
+    Without ``match_aspect`` bokeh stretches the ranges to the pane's
+    pixel box, so a wide window flattens the map horizontally. The map
+    plots Web Mercator coordinates (meters on both axes), so
+    ``match_aspect=True`` renders it undistorted inside the available
+    space, like the downloaded map.
+    """
+    try:
+        plot.state.match_aspect = True
+    except Exception:
+        pass
+
+
 def _valid_timeseries_specs(specs, data):
     """Keep var_specs whose columns exist in ``data`` (splits differ).
 
@@ -243,31 +258,21 @@ def _pin_map_figure(fig, extent: tuple[float, float, float, float]) -> None:
     ax.autoscale(False)
 
 
-def _square_extent(extent: tuple[float, float, float, float]):
-    """Expand a window extent to equal lon/lat degree spans (centered).
+def _thin_download_coastlines(fig) -> None:
+    """Thin ``plot_map``'s black coastlines so the download looks cleaner.
 
-    The download should show as many degrees in latitude as in longitude,
-    so a wide browser viewport does not stretch/squash the map (the aspect
-    must not change between variables). The span with fewer degrees is
-    grown symmetrically around the window; the result still contains the
-    original window, so any selected marker stays visible.
+    The map download keeps a white background (no sea/land tint); only
+    ``plot_map``'s thick black coastlines (linewidth 1) are reduced. The
+    selection marker is a red point and must not be touched.
     """
-    lon_min, lon_max, lat_min, lat_max = extent
-    lon_span = lon_max - lon_min
-    lat_span = lat_max - lat_min
-    if abs(lon_span - lat_span) < 1e-9:
-        return extent
-    if lon_span > lat_span:
-        pad = (lon_span - lat_span) / 2.0
-        lat_min, lat_max = lat_min - pad, lat_max + pad
-    else:
-        pad = (lat_span - lon_span) / 2.0
-        lon_min, lon_max = lon_min - pad, lon_max + pad
-    lon_min = max(float(lon_min), -180.0)
-    lon_max = min(float(lon_max), 180.0)
-    lat_min = max(float(lat_min), -89.0)
-    lat_max = min(float(lat_max), 89.0)
-    return (lon_min, lon_max, lat_min, lat_max)
+    ax = fig.axes[0]
+    for line in ax.lines:
+        color = line.get_color()
+        is_black = color in ("black", "k", "0.0") or (
+            isinstance(color, tuple) and tuple(color)[:3] == (0.0, 0.0, 0.0)
+        )
+        if is_black and (line.get_linewidth() or 0) > 0.8:
+            line.set_linewidth(0.35)
 
 
 class DownloadHandler:
@@ -339,10 +344,11 @@ class DownloadHandler:
             # Current dataviewer extent: always the window currently shown
             # in the viewer. The live plot ranges are authoritative; the
             # recorded map_zoom is only a fallback (e.g. no live plot yet).
+            # The live frame already keeps equal degrees per pixel (the
+            # aspect_ratio sizing in add_dynamic_sizing), and plot_map
+            # derives the figure from the lon/lat spans, so the download
+            # reproduces the viewer's extent and proportions 1:1.
             extent = self._read_live_extent() or self.state.get("map_zoom")
-            # Equal degrees in lat and lon: a narrow/tall window would
-            # otherwise stretch the map differently per variable.
-            extent = _square_extent(extent)
             if extent is None:
                 self._show_error("Map extent could not be determined")
                 return None
@@ -385,6 +391,7 @@ class DownloadHandler:
             # plotted afterwards can re-autoscale the axes back out to the
             # coastlines' global extent. Re-pin now that all artists are
             # drawn, so the download always shows the viewer window.
+            _thin_download_coastlines(fig)
             _pin_map_figure(fig, extent)
             fig.savefig(tmp_path, dpi=300, bbox_inches="tight")
 
@@ -998,9 +1005,10 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 title=f"{variable_name} - {split_dir}",
                 active_tools=["wheel_zoom"],
                 hooks=[
+                    _match_map_aspect,
                     lambda p, e, upd=_update_map_zoom: add_dynamic_sizing(
                         p, e, on_extent_change=upd
-                    )
+                    ),
                 ],
                 hover_tooltips=[
                     ("Location ID", f"@{config.id_column}"),

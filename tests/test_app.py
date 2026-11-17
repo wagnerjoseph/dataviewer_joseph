@@ -1,8 +1,13 @@
 """Tests for the Panel application."""
 
+import io
 import json
+import math
 
+import numpy as np
 import pandas as pd
+import panel as pn
+import pytest
 
 from dataviewer_joseph.app import (
     create_app,
@@ -131,3 +136,122 @@ class TestVarConfigPersistence:
         app = create_app(data_config)
         assert hasattr(app, "objects")
         assert len(app.objects) > 0
+
+
+def _walk_panes(obj, results):
+    """Collect all child panes/widgets of a Panel component."""
+    for child in getattr(obj, "objects", None) or []:
+        results.append(child)
+        if hasattr(child, "objects"):
+            _walk_panes(child, results)
+
+
+def _find(obj, cls, **attrs):
+    """Find the first pane/widget of a class with matching attributes."""
+    results = []
+
+    def rec(o):
+        _walk_panes(o, results)
+
+    rec(obj)
+    for r in results:
+        if not isinstance(r, cls):
+            continue
+        if all(getattr(r, k, None) == v for k, v in attrs.items()):
+            return r
+    raise AssertionError(f"Could not find {cls.__name__} with {attrs}")
+
+
+def _merc(lon, lat):
+    """Project lon/lat to Web Mercator meters."""
+    R = 6378137.0
+    return (
+        R * math.radians(lon),
+        R * math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)),
+    )
+
+
+class TestMapInteraction:
+    """Map tap/selection and map-download behavior (regression tests)."""
+
+    def _setup(self, config):
+        from bokeh.document import Document
+
+        from dataviewer_joseph.app import _live_bokeh_plot
+
+        app = create_app(config)
+        state = app._dv_state
+        map_pane = _find(app, pn.pane.HoloViews)
+        doc = Document()
+        map_pane._get_model(doc)
+        return app, state, map_pane, _live_bokeh_plot(map_pane)
+
+    def test_click_marks_selection_empty_click_clears(self, data_config):
+        """A click snaps to a location; a click far from any point clears."""
+        app, state, map_pane, plot = self._setup(data_config)
+        tap = state["tap_stream"]
+        map_data = state["map_data"]
+        row = map_data.iloc[0]
+        loc = int(row[data_config.id_column])
+
+        tap.event(
+            x=float(row[data_config.lon_col]), y=float(row[data_config.lat_col])
+        )
+        assert state["selected_location_id"] == loc
+        assert state["highlight_stream"].location_id == loc
+
+        ts_button = _find(app, pn.widgets.FileDownload, name="Download Timeseries")
+        assert ts_button.disabled is False
+
+        tap.event(x=0.0, y=0.0)
+        assert state["selected_location_id"] is None
+        assert state["highlight_stream"].location_id is None
+        assert ts_button.disabled is True
+
+    def test_download_uses_live_extent_and_selection_marker(self, data_config):
+        """The downloaded map matches the zoomed extent and the selection."""
+        app, state, map_pane, plot = self._setup(data_config)
+        s = getattr(plot, "state", plot)
+
+        # Zoom into a region the user is looking at.
+        x1, y1 = _merc(11.0, 46.0)
+        x2, y2 = _merc(19.0, 54.0)
+        s.x_range.start, s.x_range.end = x1, x2
+        s.y_range.start, s.y_range.end = y1, y2
+
+        lon_min, lon_max, lat_min, lat_max = state["map_zoom"]
+        assert lon_min == pytest.approx(11.0, abs=0.01)
+        assert lon_max == pytest.approx(19.0, abs=0.01)
+        assert lat_min == pytest.approx(46.0, abs=0.01)
+        assert lat_max == pytest.approx(54.0, abs=0.01)
+
+        # Select a location inside the view.
+        tap = state["tap_stream"]
+        map_data = state["map_data"]
+        sel = map_data.iloc[0]
+        tap.event(
+            x=float(sel[data_config.lon_col]), y=float(sel[data_config.lat_col])
+        )
+        assert state["selected_location_id"] == int(sel[data_config.id_column])
+
+        dl_map = _find(app, pn.widgets.FileDownload, name="Download Map")
+        out = dl_map.callback()
+        assert out is not None
+        red = _red_marker_pixels(out)
+        assert red > 0, "selected location must be marked on the download"
+
+        # Clearing the selection removes the marker from the download.
+        tap.event(x=0.0, y=0.0)
+        out2 = dl_map.callback()
+        assert out2 is not None
+        assert _red_marker_pixels(out2) == 0
+
+
+def _red_marker_pixels(fileobj: io.BytesIO) -> int:
+    """Count pure-red marker pixels in a downloaded map PNG."""
+    from PIL import Image
+
+    img = Image.open(fileobj).convert("RGB")
+    arr = np.asarray(img)
+    red = (arr[:, :, 0] > 180) & (arr[:, :, 1] < 100) & (arr[:, :, 2] < 100)
+    return int(red.sum())

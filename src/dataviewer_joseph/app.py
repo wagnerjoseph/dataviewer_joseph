@@ -14,6 +14,7 @@ from io import BytesIO
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import geoviews as gv
 from cmcrameri import cm as crameri_cm
@@ -22,6 +23,7 @@ import holoviews as hv
 import numpy as np
 import pandas as pd
 import panel as pn
+import param
 
 from .config import DataConfig
 from .data import (
@@ -48,6 +50,27 @@ from .var_spec_editor import VarSpecEditor
 logger = logging.getLogger(__name__)
 
 
+class SelectedLocationStream(hv.streams.Stream):
+    """Stream carrying the currently selected location_id (None = none)."""
+
+    location_id = param.Integer(default=None, allow_None=True)
+
+
+def _tag_marker_renderer(plot: Any, element: Any) -> None:
+    """Tag a marker element's renderer so dynamic sizing leaves it alone.
+
+    The selected-location marker shows fixed-size rings; the map's
+    ``add_dynamic_sizing`` hook resizes data glyphs on zoom and must not
+    shrink the marker rings to the regular point size.
+    """
+    try:
+        renderer = plot.handles.get("glyph_renderer") or plot.handles.get("glyph_renderers", [None])[0]
+    except Exception:
+        renderer = None
+    if renderer is not None:
+        renderer._dataviewer_fixed_size = True
+
+
 def _valid_timeseries_specs(specs, data):
     """Keep var_specs whose columns exist in ``data`` (splits differ).
 
@@ -58,8 +81,10 @@ def _valid_timeseries_specs(specs, data):
     """
     cols = set(data.columns)
     return [
-        s for s in specs
-        if s.get("name") and s.get("name") in cols
+        s
+        for s in specs
+        if s.get("name")
+        and s.get("name") in cols
         and (s.get("add_to") is None or s["add_to"] in cols)
     ]
 
@@ -125,6 +150,83 @@ def load_most_recent_var_config(config: DataConfig) -> str | None:
         return None
 
 
+def _live_bokeh_plot(map_pane):
+    """Return the currently rendered Bokeh plot for the active session.
+
+    Panel 1.9 stores ``(plot, child_pane)`` tuples in ``pane._plots`` and a
+    pane can hold plots for several sessions at once (``pn.serve`` shares one
+    app instance). Prefer the plot whose model belongs to the current
+    session's document; fall back to the most recently rendered one.
+    """
+    try:
+        plots = getattr(map_pane, "_plots", None)
+        if not plots:
+            return None
+    except Exception:
+        return None
+
+    cur_doc = None
+    try:
+        cur_doc = pn.state.curdoc
+    except Exception:
+        pass
+
+    newest = None
+    for value in plots.values():
+        plot = value[0] if isinstance(value, (list, tuple)) else value
+        if plot is None:
+            continue
+        state = getattr(plot, "state", None)
+        if state is None:
+            continue
+        if cur_doc is not None and getattr(state, "document", None) is cur_doc:
+            return plot
+        newest = plot
+    return newest
+
+
+def _plot_extent(plot) -> tuple[float, float, float, float] | None:
+    """Map extent of a plot/model as ``(lon_min, lon_max, lat_min, lat_max)``.
+
+    Accepts either a HoloViews/Bokeh plot (``.state``) or a Bokeh figure
+    model directly. Reads Web Mercator ranges (no clamping).
+    """
+    try:
+        s = getattr(plot, "state", plot)
+        x_start, x_end = s.x_range.start, s.x_range.end
+        y_start, y_end = s.y_range.start, s.y_range.end
+        if None in (x_start, x_end, y_start, y_end):
+            return None
+        lat_min, lon_min = web_mercator_to_latlon(float(x_start), float(y_start))
+        lat_max, lon_max = web_mercator_to_latlon(float(x_end), float(y_end))
+        return (lon_min, lon_max, lat_min, lat_max)
+    except Exception:
+        pass
+    return None
+
+
+def _ranges_to_extent(ranges: dict) -> tuple[float, float, float, float] | None:
+    """Convert saved Web Mercator ranges to ``(lon_min, lon_max, lat_min, lat_max)``."""
+    try:
+        x_start, x_end = float(ranges["x_start"]), float(ranges["x_end"])
+        y_start, y_end = float(ranges["y_start"]), float(ranges["y_end"])
+        lat_min, lon_min = web_mercator_to_latlon(x_start, y_start)
+        lat_max, lon_max = web_mercator_to_latlon(x_end, y_end)
+        return (lon_min, lon_max, lat_min, lat_max)
+    except Exception:
+        pass
+    return None
+
+
+def _live_extent(map_pane) -> tuple[float, float, float, float] | None:
+    """Current map extent as ``(lon_min, lon_max, lat_min, lat_max)``."""
+    try:
+        return _plot_extent(_live_bokeh_plot(map_pane))
+    except Exception:
+        pass
+    return None
+
+
 class DownloadHandler:
     """Handler for map and timeseries downloads."""
 
@@ -169,25 +271,7 @@ class DownloadHandler:
         Returns ``(lon_min, lon_max, lat_min, lat_max)`` from the current
         Web Mercator ranges (no clamping).
         """
-        try:
-            if hasattr(self.map_pane, "_plots") and self.map_pane._plots:
-                plot = list(self.map_pane._plots.values())[0]
-                if isinstance(plot, (list, tuple)):
-                    plot = plot[0]
-                if hasattr(plot, "state"):
-                    s = plot.state
-                    x_start = s.x_range.start
-                    x_end = s.x_range.end
-                    y_start = s.y_range.start
-                    y_end = s.y_range.end
-                    if None in (x_start, x_end, y_start, y_end):
-                        return None
-                    lat_min, lon_min = web_mercator_to_latlon(x_start, y_start)
-                    lat_max, lon_max = web_mercator_to_latlon(x_end, y_end)
-                    return (lon_min, lon_max, lat_min, lat_max)
-        except Exception:
-            pass
-        return None
+        return _live_extent(self.map_pane)
 
     def _generate_map_download(self):
         """Generate map file content for download."""
@@ -209,8 +293,10 @@ class DownloadHandler:
                 self._show_error("No data available for download")
                 return None
 
-            # Current dataviewer extent (live from rendered map)
-            extent = self._read_live_extent()
+            # Current dataviewer extent: the zoom recorded by the restore
+            # step (matches what the user sees), falling back to the live
+            # plot for the plain zoom case.
+            extent = self.state.get("map_zoom") or self._read_live_extent()
             if extent is None:
                 self._show_error("Map extent could not be determined")
                 return None
@@ -259,7 +345,9 @@ class DownloadHandler:
         except Exception as e:
             import traceback
 
-            logger.error(f"Error generating map download: {e}\n{traceback.format_exc()}")
+            logger.error(
+                f"Error generating map download: {e}\n{traceback.format_exc()}"
+            )
             self._show_error(f"Failed to generate map: {e!s}")
             return None
         finally:
@@ -292,6 +380,7 @@ class DownloadHandler:
             )
             self._show_error(f"Failed to generate timeseries: {e!s}")
             return None
+
 
 # Curated Fabio Crameri scientific colormaps for the map, grouped by gradient type.
 CRAMERI_CMAPS = {
@@ -379,6 +468,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         "current_variable": None,
         "selected_location_id": None,
         "map_data": None,
+        "map_zoom": None,
         "location_lookup": None,
         "updating_location_input": False,
         "ts_data": None,
@@ -526,7 +616,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             except Exception:
                 pass
 
-            if tile_id:
+            if tile_id is not None and not pd.isna(tile_id):
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     ts_future = executor.submit(
                         load_timeseries_for_location,
@@ -556,9 +646,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
                 # Get var_specs from editor (keep only columns of THIS split)
                 var_spec_editor = state.get("var_spec_editor")
-                var_specs = (
-                    var_spec_editor.to_var_specs() if var_spec_editor else None
-                )
+                var_specs = var_spec_editor.to_var_specs() if var_spec_editor else None
                 if var_specs:
                     var_specs = _valid_timeseries_specs(var_specs, ts_data)
 
@@ -586,7 +674,10 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                     state["current_timeseries_fig"] = figs[0]
                     download_timeseries_button.disabled = False
 
-                if map_data_for_location is not None and not map_data_for_location.empty:
+                if (
+                    map_data_for_location is not None
+                    and not map_data_for_location.empty
+                ):
                     map_data_table = create_map_data_table(map_data_for_location)
                     map_data_table_pane.clear()
                     map_data_table_pane.append(map_data_table)
@@ -660,9 +751,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         except Exception as e:
             logger.warning(f"Error rendering additional data: {e}")
             additional_data_pane.clear()
-            additional_data_pane.append(
-                pn.pane.Markdown(f"Error rendering: {e!s}")
-            )
+            additional_data_pane.append(pn.pane.Markdown(f"Error rendering: {e!s}"))
 
     def regenerate_timeseries():
         """Re-render timeseries plot with current var_specs (from cached ts_data)."""
@@ -674,9 +763,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
         # Get var_specs from editor (keep only columns of THIS split)
         var_spec_editor = state.get("var_spec_editor")
-        var_specs = (
-            var_spec_editor.to_var_specs() if var_spec_editor else None
-        )
+        var_specs = var_spec_editor.to_var_specs() if var_spec_editor else None
         if var_specs:
             var_specs = _valid_timeseries_specs(var_specs, ts_data)
 
@@ -702,6 +789,17 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             timeseries_pane.clear()
             timeseries_pane.append(timeseries_plot)
 
+    def _update_map_zoom(extent):
+        """Record the newest live extent (drives the map download)."""
+        if extent is not None:
+            state["map_zoom"] = extent
+
+    def _mark_selection(location_id: int | None):
+        """Publish the selected location to the map's marker layer."""
+        stream = state.get("highlight_stream")
+        if stream is not None and stream.location_id != location_id:
+            stream.event(location_id=location_id)
+
     def select_location(pos: int, location_id: int):
         """Select a location: update state, widgets, and load its data."""
         state["selected_location_id"] = location_id
@@ -713,7 +811,36 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             state["updating_location_input"] = False
 
         info_pane.object = f"**Selected Location ID:** `{location_id}`"
+        _mark_selection(location_id)
         load_and_display_location_data(location_id)
+
+    def clear_selection():
+        """Clear the current selection: marker, timeseries, tables, downloads."""
+        state["selected_location_id"] = None
+
+        state["updating_location_input"] = True
+        try:
+            location_input.value = None
+        finally:
+            state["updating_location_input"] = False
+
+        state["current_timeseries_fig"] = None
+        download_timeseries_button.disabled = True
+
+        info_pane.object = "**Status:** Ready - Select a location to view details"
+        timeseries_pane.clear()
+        timeseries_pane.append(
+            pn.pane.Markdown("**Click a location on the map to view timeseries**")
+        )
+        map_data_table_pane.clear()
+        map_data_table_pane.append(
+            pn.pane.Markdown("Select a location to view map data")
+        )
+        additional_data_pane.clear()
+        additional_data_pane.append(
+            pn.pane.Markdown("Select a location to view additional data")
+        )
+        _mark_selection(None)
 
     def create_tap_handler(
         map_data: pd.DataFrame,
@@ -723,7 +850,10 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         """Create a tap callback that snaps map clicks to the nearest location."""
 
         def on_tap(x, y):
-            """Snap a click anywhere on the map to the nearest location."""
+            """Snap a click anywhere on the map to the nearest location.
+
+            Clicking near a point selects it; clicking anywhere else (no
+            location within the snap distance) clears the current selection."""
             if x is None or y is None:
                 return
             if abs(x) <= 180 and abs(y) <= 90:
@@ -739,14 +869,10 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 max_distance_km=SNAP_DISTANCE_KM,
             )
             if pos is None:
-                selected = state.get("selected_location_id")
-                suffix = (
-                    f" (keeping Location ID `{selected}`)"
-                    if selected is not None
-                    else ""
-                )
+                clear_selection()
                 info_pane.object = (
-                    f"**No location within {SNAP_DISTANCE_KM:g} km of click**{suffix}"
+                    f"**No location within {SNAP_DISTANCE_KM:g} km of click — "
+                    "selection cleared"
                 )
                 return
             location_id = int(map_data.iloc[pos][config.id_column])
@@ -761,16 +887,16 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
     def _saved_view_ranges() -> dict | None:
         """Return the current zoom ranges of the live map plot, if any."""
         try:
-            if hasattr(map_pane, "_plots") and map_pane._plots:
-                plot = list(map_pane._plots.values())[0]
-                if hasattr(plot, "state"):
-                    s = plot.state
-                    return {
-                        "x_start": s.x_range.start,
-                        "x_end": s.x_range.end,
-                        "y_start": s.y_range.start,
-                        "y_end": s.y_range.end,
-                    }
+            plot = _live_bokeh_plot(map_pane)
+            if plot is None:
+                return None
+            s = getattr(plot, "state", plot)
+            return {
+                "x_start": s.x_range.start,
+                "x_end": s.x_range.end,
+                "y_start": s.y_range.start,
+                "y_end": s.y_range.end,
+            }
         except Exception:
             pass
         return None
@@ -810,14 +936,20 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 color=variable_name,
                 cmap=palette,
                 size=5,
-                alpha=0.9,
+                fill_alpha=0.9,
+                hover_fill_alpha=1.0,
+                hover_line_alpha=1.0,
                 responsive=True,
                 tools=["tap", "hover", "box_zoom", "wheel_zoom", "reset"],
                 colorbar=True,
                 clim=clim,
                 title=f"{variable_name} - {split_dir}",
                 active_tools=["wheel_zoom"],
-                hooks=[add_dynamic_sizing],
+                hooks=[
+                    lambda p, e, upd=_update_map_zoom: add_dynamic_sizing(
+                        p, e, on_extent_change=upd
+                    )
+                ],
                 hover_tooltips=[
                     ("Location ID", f"@{config.id_column}"),
                     ("Value", f"@{variable_name}"),
@@ -826,33 +958,93 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 ],
             )
 
+            def update_marker(location_id=None, **_):
+                """Marker overlay for the selected location (or nothing)."""
+                map_data_for_marker = state.get("map_data")
+                if location_id is None or map_data_for_marker is None:
+                    return hv.Overlay([])
+                row = map_data_for_marker[
+                    map_data_for_marker[config.id_column] == location_id
+                ]
+                if row.empty:
+                    return hv.Overlay([])
+                h_df = pd.DataFrame(
+                    {
+                        config.lon_col: [float(row[config.lon_col].iloc[0])],
+                        config.lat_col: [float(row[config.lat_col].iloc[0])],
+                        config.id_column: [int(location_id)],
+                    }
+                )
+                rings = []
+                for ring_size, fill_alpha, line_width, line_alpha, line_color in (
+                    (30, 0.2, 3, 0.5, "red"),
+                    (20, 0.3, 2, 0.6, "red"),
+                    (12, 1.0, 2, 1.0, "white"),
+                ):
+                    rings.append(
+                        gv.Points(
+                            h_df,
+                            kdims=[config.lon_col, config.lat_col],
+                            vdims=[config.id_column],
+                        ).opts(
+                            size=ring_size,
+                            fill_alpha=fill_alpha,
+                            line_alpha=line_alpha,
+                            line_width=line_width,
+                            line_color=line_color,
+                            color="red",
+                            marker="circle",
+                            tools=[],
+                            hooks=[_tag_marker_renderer],
+                        )
+                    )
+                return hv.Overlay(rings, group="SelectedMarker")
+
+            selection_stream = SelectedLocationStream(
+                location_id=state.get("selected_location_id")
+            )
+            state["highlight_stream"] = selection_stream
+            marker_layer = hv.DynamicMap(update_marker, streams=[selection_stream])
+
             # Snap clicks anywhere on the map to the nearest location
             tap_stream = hv.streams.Tap(source=points)
+            state["tap_stream"] = tap_stream
             tap_stream.add_subscriber(
                 create_tap_handler(map_data, config.lon_col, config.lat_col)
             )
 
             basemap = gv.tile_sources.OSM.opts(alpha=0.25, responsive=True)
-            map_pane.object = basemap * points
+            map_pane.object = basemap * points * marker_layer
             download_map_button.disabled = False
 
-            # Restore zoom ranges after the pane has re-rendered
+            # Restore zoom ranges after the pane has re-rendered. Panel swaps
+            # the plot model asynchronously, so run the restore after the swap
+            # instead of onload.
             if saved_ranges:
 
                 def restore_ranges():
                     try:
-                        if hasattr(map_pane, "_plots") and map_pane._plots:
-                            bokeh_plot = list(map_pane._plots.values())[0]
-                            if hasattr(bokeh_plot, "state"):
-                                s = bokeh_plot.state
-                                s.x_range.start = saved_ranges["x_start"]
-                                s.x_range.end = saved_ranges["x_end"]
-                                s.y_range.start = saved_ranges["y_start"]
-                                s.y_range.end = saved_ranges["y_end"]
+                        plot = _live_bokeh_plot(map_pane)
+                        if plot is None:
+                            return
+                        s = getattr(plot, "state", plot)
+                        s.x_range.start = saved_ranges["x_start"]
+                        s.x_range.end = saved_ranges["x_end"]
+                        s.y_range.start = saved_ranges["y_start"]
+                        s.y_range.end = saved_ranges["y_end"]
+                        # The saved ranges are the view the user had; record
+                        # them so a download matches the map right away.
+                        extent = _ranges_to_extent(saved_ranges)
+                        if extent:
+                            state["map_zoom"] = extent
                     except Exception:
                         pass
 
-                pn.state.onload(restore_ranges)
+                doc = pn.state.curdoc
+                if doc is not None and doc.session_context is not None:
+                    pn.state.execute(restore_ranges, schedule=True)
+                else:
+                    pn.state.onload(restore_ranges)
 
         finally:
             loading_indicator.value = False
@@ -912,6 +1104,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
         location_id = event.new
         if location_id is None:
+            clear_selection()
             return
 
         if state["map_data"] is None:
@@ -984,9 +1177,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
                 var_spec_editor.from_json(saved_text)
                 logger.info("Auto-imported the most recent var config")
         except Exception as e:
-            logger.warning(
-                f"Could not auto-import most recent var config: {e}"
-            )
+            logger.warning(f"Could not auto-import most recent var config: {e}")
     state["var_spec_editor"] = var_spec_editor
 
     # Use the editor's live layout (automatically updates on add/remove)
@@ -1011,9 +1202,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         except Exception as e:
             import traceback
 
-            logger.error(
-                f"Error generating var config: {e}\n{traceback.format_exc()}"
-            )
+            logger.error(f"Error generating var config: {e}\n{traceback.format_exc()}")
             return None
 
     download_var_config_button = pn.widgets.FileDownload(
@@ -1042,9 +1231,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         except Exception as e:
             import traceback
 
-            logger.error(
-                f"Error importing var config: {e}\n{traceback.format_exc()}"
-            )
+            logger.error(f"Error importing var config: {e}\n{traceback.format_exc()}")
             error_pane.object = f"**Error:** Failed to import var config: {e!s}"
             error_pane.visible = True
 
@@ -1127,7 +1314,15 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
 
     config_toggle.on_click(toggle_config)
 
-    controls = [variable_select, location_input, gradient_select, cmap_select, loading_indicator, download_map_button, download_timeseries_button]
+    controls = [
+        variable_select,
+        location_input,
+        gradient_select,
+        cmap_select,
+        loading_indicator,
+        download_map_button,
+        download_timeseries_button,
+    ]
     if not single_split:
         controls.insert(0, split_select)
 
@@ -1154,7 +1349,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         margin=0,
     )
 
-    return pn.Column(
+    layout = pn.Column(
         pn.pane.Markdown(
             "# Dataviewer",
             sizing_mode="stretch_width",
@@ -1165,3 +1360,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         sizing_mode="stretch_both",
         styles={"margin": "0", "padding": "0"},
     )
+    # Reference for tests that need to inspect per-app state (map_zoom,
+    # selected_location_id, highlight stream). No runtime consumers.
+    layout._dv_state = state
+    return layout

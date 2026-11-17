@@ -8,6 +8,7 @@ import pytest
 
 from dataviewer_joseph.plotting.map_data_table import create_map_data_table
 from dataviewer_joseph.plotting.maps import (
+    add_dynamic_sizing,
     find_nearest_location,
     haversine_km,
     web_mercator_to_latlon,
@@ -149,3 +150,116 @@ class TestWebMercatorToLatlon:
         lat, lon = web_mercator_to_latlon(x, y)
         assert lat == pytest.approx(50.0, abs=1e-6)
         assert lon == pytest.approx(10.0, abs=1e-6)
+
+
+class TestAddDynamicSizing:
+    """Tests for add_dynamic_sizing (zoom-adaptive point sizing)."""
+
+    @staticmethod
+    def _render_points(hooks):
+        """Render a small gv.Points with the given hooks and return its figure."""
+        import geoviews as gv
+        import holoviews as hv
+
+        hv.extension("bokeh")
+        hv.renderer("bokeh").webgl = False
+
+        df = pd.DataFrame(
+            {
+                "lon": np.linspace(11.0, 12.0, 6),
+                "lat": np.linspace(48.0, 49.0, 6),
+                "location_id": range(6),
+                "v": np.random.default_rng(0).random(6),
+            }
+        )
+        points = gv.Points(
+            df, kdims=["lon", "lat"], vdims=["location_id", "v"]
+        ).opts(
+            color="v",
+            cmap=["#111111", "#444444"],
+            size=5,
+            fill_alpha=0.9,
+            tools=["tap", "hover"],
+            hover_tooltips=[("ID", "@location_id")],
+            hooks=hooks,
+        )
+        plot = hv.render(points)
+        return plot.state if hasattr(plot, "state") else plot
+
+    def test_all_glyph_states_resized_together(self):
+        """Hover/selection glyphs must match the base size (no point shrink)."""
+        from bokeh.models import Scatter
+
+        fig = self._render_points([add_dynamic_sizing])
+        renderer = [
+            r
+            for r in fig.renderers
+            if hasattr(r, "glyph") and isinstance(r.glyph, Scatter)
+        ][0]
+        sizes = []
+        for name in ("glyph", "selection_glyph", "nonselection_glyph", "hover_glyph"):
+            glyph = getattr(renderer, name, None)
+            if glyph is not None and hasattr(glyph, "size"):
+                sizes.append(glyph.size)
+        assert len(sizes) >= 2
+        assert all(abs(s - sizes[0]) < 1e-9 for s in sizes)
+
+    def test_fixed_size_renderers_are_untouched(self):
+        """Renderers tagged ``_dataviewer_fixed_size`` keep their size."""
+        from bokeh.models import Scatter
+        import geoviews as gv
+        import holoviews as hv
+
+        hv.extension("bokeh")
+        hv.renderer("bokeh").webgl = False
+
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame(
+            {
+                "lon": np.linspace(11.0, 12.0, 6),
+                "lat": np.linspace(48.0, 49.0, 6),
+                "location_id": range(6),
+                "v": rng.random(6),
+            }
+        )
+        marker_df = pd.DataFrame({"lon": [11.5], "lat": [48.5], "location_id": [99]})
+
+        def tag_fixed(plot, element):
+            try:
+                plot.handles["glyph_renderer"]._dataviewer_fixed_size = True
+            except Exception:
+                pass
+
+        data_points = gv.Points(
+            df, kdims=["lon", "lat"], vdims=["location_id", "v"]
+        ).opts(
+            color="v",
+            cmap=["#111111", "#444444"],
+            size=5,
+            fill_alpha=0.9,
+            tools=["tap", "hover"],
+            hover_tooltips=[("ID", "@location_id")],
+            hooks=[add_dynamic_sizing],
+        )
+        marker = gv.Points(
+            marker_df, kdims=["lon", "lat"], vdims=["location_id"]
+        ).opts(size=30, fill_alpha=1.0, tools=[], hooks=[tag_fixed])
+
+        plot = hv.render(data_points * marker)
+        fig = plot.state if hasattr(plot, "state") else plot
+        renderers = [
+            r for r in fig.renderers if hasattr(r, "glyph") and isinstance(r.glyph, Scatter)
+        ]
+        fixed = next(r for r in renderers if getattr(r, "_dataviewer_fixed_size", False))
+        dynamic = next(r for r in renderers if not getattr(r, "_dataviewer_fixed_size", False))
+        assert fixed.glyph.size == 30
+
+        # Change the range; the dynamic renderer resizes, the fixed one does not.
+        orig_dynamic = dynamic.glyph.size
+        x = fig.x_range
+        width = x.end - x.start
+        x.start = x.start - width * 3
+        x.end = x.end + width * 3
+        assert fixed.glyph.size == 30
+        assert dynamic.glyph.size != orig_dynamic
+

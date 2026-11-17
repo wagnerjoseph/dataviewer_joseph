@@ -35,9 +35,10 @@ def haversine_km(
     lon1 = np.radians(np.asarray(lon1, dtype=float))
     lat2 = np.radians(np.asarray(lat2, dtype=float))
     lon2 = np.radians(np.asarray(lon2, dtype=float))
-    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(
-        (lon2 - lon1) / 2
-    ) ** 2
+    a = (
+        np.sin((lat2 - lat1) / 2) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    )
     a = np.clip(a, 0.0, 1.0)
     return 2.0 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))
 
@@ -77,56 +78,106 @@ def find_nearest_location(
     return pos
 
 
-def add_dynamic_sizing(plot: Any, element: Any) -> None:
-    """Dynamic point sizing using direct Bokeh callbacks with debouncing."""
+def add_dynamic_sizing(
+    plot: Any, element: Any, on_extent_change: Any = None
+) -> None:
+    """Adapt point size to the zoom level using Bokeh range callbacks.
+
+    Every sized glyph state of every sized renderer is resized — the base,
+    selection/nonselection (tapped points), hover (inspected points) and
+    muted glyphs — so no state can fall out of sync and make points appear
+    smaller on hover or after selection. Renderers tagged with
+    ``_dataviewer_fixed_size`` (e.g. the selected-location marker) keep
+    their size. Both axes are watched (a zoom can change only one range)
+    and the applied size is re-resolved on every update, so no callback can
+    hold a stale renderer.
+
+    Args:
+        plot: The HoloViews/Bokeh plot (``.state`` is the bokeh figure)
+        element: The rendered HoloViews element
+        on_extent_change: Optional callback invoked with the current
+            ``(lon_min, lon_max, lat_min, lat_max)`` extent whenever the
+            view ranges change (or immediately, with the initial extent).
+    """
     # Prevent duplicate callbacks
     if getattr(plot.state, "_size_callback_added", False):
         return
     plot.state._size_callback_added = True
 
-    # Find the scatter renderer
-    scatter = None
-    for r in plot.state.renderers:
-        if hasattr(r, "glyph") and hasattr(r.glyph, "size"):
-            scatter = r
-            break
+    def scatters() -> list:
+        """All glyph renderers on the figure that expose a ``size``."""
+        out = []
+        for r in plot.state.renderers:
+            if getattr(r, "_dataviewer_fixed_size", False):
+                continue
+            if hasattr(r, "glyph") and hasattr(r.glyph, "size"):
+                out.append(r)
+        return out
 
-    if scatter is None:
-        return
+    def desired_size() -> float | None:
+        """Point size matching the current x-range extent (km)."""
+        x_start = plot.state.x_range.start
+        x_end = plot.state.x_range.end
+        if None in (x_start, x_end):
+            return None
+        extent = (x_end - x_start) / 1000
+        size = (10_000 / extent) ** 1.2
+        result = max(1.0, min(50.0, size))
+        return result if math.isfinite(result) else None
 
-    # Debounce state - track last zoom time
-    plot.state._last_zoom_time = 0
+    def apply_zoom() -> None:
+        """Apply the size for the current range to every sized glyph."""
+        try:
+            size = desired_size()
+            if size is None:
+                return
+            for renderer in scatters():
+                for name in ("glyph", "selection_glyph", "nonselection_glyph", "hover_glyph", "muted_glyph"):
+                    glyph = getattr(renderer, name, None)
+                    if glyph is not None and hasattr(glyph, "size"):
+                        current = getattr(glyph, "size", None)
+                        if current != size:
+                            glyph.size = size
+        except Exception:
+            pass
 
-    def update_size_immediate():
-        """Actually update the point size if zoom has stopped."""
-        current_time = time.time()
-        elapsed = current_time - plot.state._last_zoom_time
+    def current_extent() -> tuple[float, float, float, float] | None:
+        """Current extent as ``(lon_min, lon_max, lat_min, lat_max)``."""
+        try:
+            s = plot.state
+            x_start, x_end = s.x_range.start, s.x_range.end
+            y_start, y_end = s.y_range.start, s.y_range.end
+            if None in (x_start, x_end, y_start, y_end):
+                return None
+            values = (x_start, x_end, y_start, y_end)
+            if not all(math.isfinite(float(v)) for v in values):
+                return None
+            lat_min, lon_min = web_mercator_to_latlon(float(x_start), float(y_start))
+            lat_max, lon_max = web_mercator_to_latlon(float(x_end), float(y_end))
+            return (lon_min, lon_max, lat_min, lat_max)
+        except Exception:
+            return None
 
-        # Only update if 0.3 seconds have passed since last zoom event
-        if elapsed >= 0.3:
-            x_start = plot.state.x_range.start
-            x_end = plot.state.x_range.end
-            extent = (x_end - x_start) / 1000
-
-            # Calculate size based on extent
-            size = (10_000 / extent) ** 1.2
-            size = max(1, min(50, size))
-
-            # Update the glyph size
-            scatter.glyph.size = size
-
-    def update_size(attr: str, old: Any, new: Any):
-        """Update point size based on zoom level with debouncing."""
-        # Record the time of this zoom event
+    def update_size(attr: str, old: Any, new: Any) -> None:
+        """Apply the size + extent on every range change."""
         plot.state._last_zoom_time = time.time()
+        if on_extent_change is not None:
+            try:
+                on_extent_change(current_extent())
+            except Exception:
+                pass
+        apply_zoom()
 
-        # Schedule update for 0.3 seconds from now
-        plot.document.add_timeout_callback(update_size_immediate, 300)
+    plot.state._last_zoom_time = 0.0
 
-    # Attach callbacks directly to range changes
-    plot.state.x_range.on_change("start", update_size)
-    plot.state.x_range.on_change("end", update_size)
+    for rng in (plot.state.x_range, plot.state.y_range):
+        for attr in ("start", "end"):
+            rng.on_change(attr, update_size)
 
     # Trigger initial update
-    plot.state._last_zoom_time = 0
-    update_size_immediate()
+    apply_zoom()
+    if on_extent_change is not None:
+        try:
+            on_extent_change(current_extent())
+        except Exception:
+            pass

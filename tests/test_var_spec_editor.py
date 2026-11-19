@@ -356,3 +356,139 @@ class TestVarSpecEditor:
         editor.add_subplot()
 
         assert editor._subplots[1]["primary"]["name"].value == "new_var"
+
+
+# =============================================================================
+# FACET CHAIN: per-variable selectors instead of one big dropdown
+# =============================================================================
+
+FACET_VOCAB = {
+    "group": ["lai", "swvl1"],
+    "scale": ["year", "month"],
+    "model": ["linear", "tree", "ridge"],
+}
+
+TS_COLUMNS = [
+    "lai_deviation",
+    "swvl1_deviation",
+    "rho_bias_lai_year",
+    "rho_bias_swvl1_month",
+    "prediction_linear",
+    "prediction_tree",
+    "bias_linear",
+    "bias_ridge",
+    "backscatter40",
+]
+
+
+def _faceted_editor(**kwargs):
+    from dataviewer_joseph.facets import FacetSchema
+
+    schema = FacetSchema(TS_COLUMNS, FACET_VOCAB)
+    return VarSpecEditor(
+        available_variables=TS_COLUMNS, facet_schema=schema, **kwargs
+    )
+
+
+class TestFacetChain:
+    """Per-variable facet selector chain."""
+
+    def test_chain_built_per_row(self):
+        editor = _faceted_editor()
+        editor.add_subplot()
+        widgets = editor._subplots[0]["primary"]
+        assert widgets.get("chain")
+        assert list(widgets["chain"]) == [
+            "group",
+            "scale",
+            "model",
+            "metric",
+            "other",
+        ]
+
+    def test_resolve_on_single_match(self):
+        editor = _faceted_editor()
+        editor.add_subplot("bias_linear")
+        w = editor._subplots[0]["primary"]
+        assert w["chain"]["model"].value == "linear"  # synced from the name
+        # Free picks: ignore the synced values, choose group + scale only.
+        w["chain"]["model"].value = "All"
+        w["chain"]["metric"].value = "All"
+        w["chain"]["group"].value = "lai"
+        # Two candidates (lai_deviation, rho_bias_lai_year): stays unchanged.
+        assert w["name"].value == "bias_linear"
+        w["chain"]["scale"].value = "year"
+        # Exactly one left: the row applies it.
+        assert w["name"].value == "rho_bias_lai_year"
+        assert "rho_bias_lai_year" in w["chain_status"].object
+
+    def test_model_only_pick_resolves(self):
+        editor = _faceted_editor()
+        editor.add_subplot("bias_linear")
+        w = editor._subplots[0]["primary"]
+        w["chain"]["metric"].value = "All"
+        w["chain"]["model"].value = "tree"
+        assert w["name"].value == "prediction_tree"
+
+    def test_no_match_keeps_name(self):
+        editor = _faceted_editor()
+        editor.add_subplot("bias_linear")
+        w = editor._subplots[0]["primary"]
+        w["chain"]["group"].value = "swvl1"
+        w["chain"]["scale"].value = "year"
+        w["chain"]["metric"].value = "rho"
+        assert w["name"].value == "bias_linear"
+        assert "No variable matches" in w["chain_status"].object
+
+    def test_other_facet_selects_unbound(self):
+        editor = _faceted_editor()
+        editor.add_subplot("bias_linear")
+        w = editor._subplots[0]["primary"]
+        w["chain"]["other"].value = "backscatter40"
+        assert w["name"].value == "backscatter40"
+
+    def test_spec_import_reconstructs_chain(self):
+        editor = _faceted_editor()
+        editor.from_var_specs([{"name": "prediction_linear"}])
+        w = editor._subplots[0]["primary"]
+        assert w["name"].value == "prediction_linear"
+        assert w["chain"]["model"].value == "linear"
+        assert w["chain"]["metric"].value == "prediction"
+
+    def test_spec_import_unbound_name(self):
+        editor = _faceted_editor()
+        editor.from_var_specs([{"name": "backscatter40"}])
+        w = editor._subplots[0]["primary"]
+        assert w["chain"]["other"].value == "backscatter40"
+
+    def test_flat_fallback_without_schema(self):
+        editor = VarSpecEditor(available_variables=TS_COLUMNS)
+        editor.add_subplot("bias_linear")
+        w = editor._subplots[0]["primary"]
+        assert "chain" not in w
+        assert w["name"].value == "bias_linear"
+
+    def test_update_schema_rebuilds_chain(self):
+        from dataviewer_joseph.facets import FacetSchema
+
+        editor = _faceted_editor()
+        editor.add_subplot("bias_linear")
+        assert editor._subplots[0]["primary"]["chain"]["model"].value == "linear"
+
+        # A split without facetable names removes the chain (flat fallback).
+        editor.update_available_variables(["plain_a"], facet_schema=None)
+        w = editor._subplots[0]["primary"]
+        assert "chain" not in w
+
+        # A fresh split with a matching schema re-adds the chain; picking the
+        # facets resolves the row again.
+        names = ["lai_deviation_year", "lai_deviation_month", "swvl1_deviation_year"]
+        editor.update_available_variables(
+            names,
+            facet_schema=FacetSchema(names, FACET_VOCAB),
+        )
+        w = editor._subplots[0]["primary"]
+        assert set(w["chain"]) == {"group", "scale"}
+        w["chain"]["group"].value = "lai"
+        w["chain"]["scale"].value = "year"
+        assert w["name"].value == "lai_deviation_year"

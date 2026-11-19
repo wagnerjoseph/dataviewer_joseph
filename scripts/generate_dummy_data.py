@@ -47,6 +47,12 @@ def main() -> None:
         default=42,
         help="Random seed for reproducibility",
     )
+    parser.add_argument(
+        "--faceted",
+        action="store_true",
+        help="Generate variable names matching the example facet vocabulary "
+        "(group/scale/model tokens) and enable the viewer's variable-grouping UI",
+    )
 
     args = parser.parse_args()
 
@@ -55,6 +61,7 @@ def main() -> None:
     print(f"  Tiles: {args.tiles}")
     print(f"  Splits: {args.splits or 'default'}")
     print(f"  Seed: {args.seed}")
+    print(f"  Faceted variables: {args.faceted}")
 
     config = generate_dummy_data(
         root=args.output,
@@ -62,6 +69,7 @@ def main() -> None:
         n_tiles=args.tiles,
         splits=args.splits,
         seed=args.seed,
+        faceted=args.faceted,
     )
 
     print(f"\nData generated successfully!")

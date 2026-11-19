@@ -17,6 +17,14 @@ import param
 
 pn.extension()
 
+_OTHER_FACET = "other"
+_UNSET = object()
+
+
+def _chain_label(facet: str) -> str:
+    """Editor label for a chain facet."""
+    return "Other" if facet == _OTHER_FACET else facet.title()
+
 
 class VarSpecEditor(param.Parameterized):
     """Interactive editor for building var_specs for plot_time_series.
@@ -31,12 +39,14 @@ class VarSpecEditor(param.Parameterized):
         self,
         available_variables: list[str] | None = None,
         on_config_change: Callable | None = None,
+        facet_schema: object | None = None,
         **params,
     ):
         super().__init__(**params)
         if available_variables:
             self.available_variables = available_variables
         self.on_config_change = on_config_change
+        self.facet_schema = facet_schema
         self._subplots: list[dict] = []
         self._next_id = 0
         self._debounce_timer = None
@@ -79,6 +89,158 @@ class VarSpecEditor(param.Parameterized):
         """Called when any widget changes - triggers debounced update."""
         self._debounced_trigger()
 
+    # ------------------------------------------------------------------ #
+    # facet chain (optional: one selector per facet instead of one big   #
+    # variable dropdown)                                                 #
+    # ------------------------------------------------------------------ #
+
+    def _chain_active(self) -> bool:
+        """:meth:`facet_schema` is set and detected enough groups."""
+        schema = self.facet_schema
+        if schema is None:
+            return False
+        try:
+            return bool(getattr(schema, "active")())
+        except Exception:
+            return False
+
+    def _chain_facets(self) -> list[str]:
+        """Ordered facet names for a variable row (vocab order, metric last)."""
+        schema = self.facet_schema
+        facets = list(getattr(schema, "active_facets")())
+        if getattr(schema, "unbound_names")():
+            facets.append(_OTHER_FACET)
+        return facets
+
+    def _create_chain_widgets(self, widgets: dict) -> None:
+        """Build the per-variable facet selector chain into ``widgets``."""
+        schema = self.facet_schema
+        widgets["chain"] = {}
+        widgets["chain_status"] = pn.pane.Markdown(
+            "",
+            styles={"font-size": "11px", "color": "#666"},
+            width=210,
+            margin=(2, 5),
+        )
+        for facet in self._chain_facets():
+            if facet == _OTHER_FACET:
+                options = ["All"] + list(schema.unbound_names())
+            else:
+                options = ["All"] + list(schema.facet_values(facet))
+            selector = pn.widgets.Select(
+                label=_chain_label(facet),
+                options=options,
+                value="All",
+                width=120,
+                margin=(2, 2),
+            )
+            if facet == _OTHER_FACET:
+                selector.param.watch(
+                    lambda event, ws=widgets: self._on_other_change(ws), "value"
+                )
+            else:
+                selector.param.watch(
+                    lambda event, ws=widgets: self._on_vocab_change(ws), "value"
+                )
+            selector.param.watch(self._on_widget_change, "value")
+            widgets["chain"][facet] = selector
+
+    def _on_vocab_change(self, widgets: dict) -> None:
+        """A facet pick takes precedence over a previously picked name."""
+        if widgets.get("_chain_busy"):
+            return
+        other = widgets["chain"].get(_OTHER_FACET)
+        if other is not None and other.value != "All":
+            other.value = "All"
+        self._resolve_chain(widgets)
+
+    def _on_other_change(self, widgets: dict) -> None:
+        """Picking an unbound column wins over any facet selection."""
+        if widgets.get("_chain_busy"):
+            return
+        chain = widgets["chain"]
+        if chain[_OTHER_FACET].value == "All":
+            self._resolve_chain(widgets)
+            return
+        widgets["_chain_busy"] = True
+        try:
+            for facet, selector in chain.items():
+                if facet != _OTHER_FACET:
+                    selector.value = "All"
+        finally:
+            widgets["_chain_busy"] = False
+        self._resolve_chain(widgets)
+
+    def _set_chain_status(self, widgets: dict, text: str) -> None:
+        widgets.get("chain_status").object = text
+
+    def _resolve_chain(self, widgets: dict) -> None:
+        """Resolve the row's variable from the current facet combination.
+
+        Free picks: the combination applies as soon as exactly one column
+        matches (unfulfilled selections leave the resolved name untouched).
+        """
+        chain = widgets.get("chain")
+        if not chain:
+            return
+        other = chain.get(_OTHER_FACET)
+        selection = {
+            facet: selector.value
+            for facet, selector in chain.items()
+            if facet != _OTHER_FACET and selector.value != "All"
+        }
+        if other is not None and other.value != "All":
+            widgets["name"].value = other.value
+            self._set_chain_status(widgets, f"→ {other.value}")
+            return
+        try:
+            matches = self.facet_schema.filter_names(selection)
+        except Exception:
+            matches = []
+        if len(matches) == 1:
+            widgets["name"].value = matches[0]
+            self._set_chain_status(widgets, f"→ {matches[0]}")
+        elif len(matches) > 1:
+            current = widgets["name"].value
+            note = f"{len(matches)} variables match — pick more"
+            if current:
+                note += f" (current: {current})"
+            self._set_chain_status(widgets, note)
+        else:
+            self._set_chain_status(widgets, "No variable matches this combination")
+
+    def _sync_chain_from_name(self, widgets: dict) -> None:
+        """Populate the chain selects from the row's current variable name."""
+        name = widgets.get("name").value
+        chain = widgets.get("chain")
+        schema = self.facet_schema
+        if not name or not chain or schema is None:
+            return
+        if name in schema.unbound_names():
+            if _OTHER_FACET in chain:
+                chain[_OTHER_FACET].value = name
+            return
+        if _OTHER_FACET in chain:
+            chain[_OTHER_FACET].value = "All"
+        binding = getattr(schema, "binding", {}).get(name, {})
+        for facet, value in binding.items():
+            selector = chain.get(facet)
+            if selector is not None and value in selector.options:
+                selector.value = value
+        metric = getattr(schema, "metric_tokens", {}).get(name) or []
+        metric_selector = chain.get("metric")
+        if metric_selector is not None and metric and metric[0] in metric_selector.options:
+            metric_selector.value = metric[0]
+
+    def _rebuild_chain_widgets(self, widgets: dict) -> None:
+        """Recreate a row's chain for a (new) facet schema, if active."""
+        if not self._chain_active():
+            widgets.pop("chain", None)
+            widgets.pop("chain_status", None)
+            return
+        self._create_chain_widgets(widgets)
+        self._sync_chain_from_name(widgets)
+
     def _get_next_color(self, used_colors: set) -> str:
         """Get the next unused color from the palette."""
         for c in self._color_palette:
@@ -109,21 +271,27 @@ class VarSpecEditor(param.Parameterized):
             ),
             "color": pn.widgets.ColorPicker(value=color_default, width=45),
             "label": pn.widgets.TextInput(value=label_default, width=150),
-            "line_width": pn.widgets.FloatSlider(start=0.5, end=5, step=0.5, value=1.5),
-            "alpha": pn.widgets.FloatSlider(start=0.1, end=1.0, step=0.1, value=1.0),
-            "plotstyle": pn.widgets.Select(options=["line", "points", "both"], value="line"),
+            "line_width": pn.widgets.FloatSlider(
+                start=0.5, end=5, step=0.5, value=1.5, width=150
+            ),
+            "alpha": pn.widgets.FloatSlider(
+                start=0.1, end=1.0, step=0.1, value=1.0, width=150
+            ),
+            "plotstyle": pn.widgets.Select(
+                options=["line", "points", "both"], value="line", width=150
+            ),
             "threshold_mode": pn.widgets.RadioButtonGroup(
                 options=["Value", "Percentile"],
                 value="Value",
                 color="primary",
             ),
-            "lower_threshold_val": pn.widgets.FloatInput(value=None),
+            "lower_threshold_val": pn.widgets.FloatInput(value=None, width=150),
             "lower_threshold_color": pn.widgets.ColorPicker(value="#ff0000"),
-            "upper_threshold_val": pn.widgets.FloatInput(value=None),
+            "upper_threshold_val": pn.widgets.FloatInput(value=None, width=150),
             "upper_threshold_color": pn.widgets.ColorPicker(value="#0000ff"),
-            "lower_percentile": pn.widgets.FloatInput(value=None, step=1),
+            "lower_percentile": pn.widgets.FloatInput(value=None, step=1, width=150),
             "lower_percentile_color": pn.widgets.ColorPicker(value="#ff0000"),
-            "upper_percentile": pn.widgets.FloatInput(value=None, step=1),
+            "upper_percentile": pn.widgets.FloatInput(value=None, step=1, width=150),
             "upper_percentile_color": pn.widgets.ColorPicker(value="#0000ff"),
         }
 
@@ -132,6 +300,9 @@ class VarSpecEditor(param.Parameterized):
             widgets["align_zero"] = pn.widgets.Checkbox(label="Align zero", value=False)
             widgets["compute_corr"] = pn.widgets.Checkbox(label="Correlation", value=False)
             widgets["remove_btn"] = pn.widgets.Button(label="Remove", color="danger", width=60)
+
+        if self._chain_active():
+            self._create_chain_widgets(widgets)
 
         for key, widget in widgets.items():
             if hasattr(widget, "param") and hasattr(widget.param, "value"):
@@ -145,6 +316,9 @@ class VarSpecEditor(param.Parameterized):
                 label_widget.value = new_name.replace("_", " ").title()
 
         widgets["name"].param.watch(on_name_change, "value")
+
+        if widgets.get("chain") and widgets["name"].value:
+            self._sync_chain_from_name(widgets)
 
         return widgets
 
@@ -211,6 +385,55 @@ class VarSpecEditor(param.Parameterized):
             active=[],
         )
 
+    def _variable_selector_column(self, widgets: dict) -> pn.Column:
+        """The variable picker of a row: facet chain or the plain dropdown.
+
+        With facet chains the total select width is computed from the number
+        of facets (each select is 120px wide plus margins), so the row never
+        overflows its container and cannot overlap widgets placed after it.
+        """
+        chain = widgets.get("chain")
+        if chain:
+            n = len(chain)
+            return pn.Column(
+                pn.Row(
+                    *chain.values(),
+                    margin=(0, 4),
+                    sizing_mode="stretch_width",
+                ),
+                widgets["chain_status"],
+                width=n * 124 + 6,
+            )
+        return pn.Column(widgets["name"], width=160)
+
+    def _picker_meta_items(self, widgets, extra: list | None = None) -> list:
+        """Non-selector widgets of a variable row: color, label, extras."""
+        items = [
+            pn.Column(widgets["color"], width=60),
+            pn.Column(widgets["label"], width=160),
+        ]
+        if extra:
+            items.extend(extra)
+        return items
+
+    def _picker_row(self, widgets, extra: list | None = None):
+        """The variable picker line of a row.
+
+        With facet chains the selector column can be wide (one select per
+        facet), so the color/label extras move to a second line — this keeps
+        the dropdowns from overlapping the color picker at any width.
+        """
+        selector = self._variable_selector_column(widgets)
+        meta = self._picker_meta_items(widgets, extra)
+        if widgets.get("chain"):
+            return pn.Column(
+                selector,
+                pn.Row(*meta, margin=(0, 0, 0, 5)),
+                margin=(5, 5, 0, 5),
+                sizing_mode="stretch_width",
+            )
+        return pn.Row(selector, *meta, margin=(5, 5, 0, 5))
+
     def _refresh_layout(self):
         """Rebuild the layout from current _subplots."""
         subplot_cards = []
@@ -219,30 +442,22 @@ class VarSpecEditor(param.Parameterized):
             subplot_num = sp_idx + 1
 
             primary = sp["primary"]
-            primary_row = pn.Row(
-                pn.Column(primary["name"], width=160),
-                pn.Column(primary["color"], width=60),
-                pn.Column(primary["label"], width=160),
-                margin=(5, 5, 0, 5),
-                scroll=True,
-            )
+            primary_row = self._picker_row(primary)
             primary_advanced = self._create_advanced_accordion(primary)
 
             overlay_rows = []
             for ov_idx, ov in enumerate(sp["overlays"]):
-                ov_row = pn.Row(
-                    pn.Column(ov["name"], width=160),
-                    pn.Column(ov["color"], width=60),
-                    pn.Column(ov["label"], width=160),
-                    pn.Column(
-                        ov["add_second_axis"],
-                        ov["align_zero"],
-                        ov["compute_corr"],
-                        width=140,
-                    ),
-                    ov["remove_btn"],
-                    margin=(5, 5, 0, 5),
-                    scroll=True,
+                ov_row = self._picker_row(
+                    ov,
+                    extra=[
+                        pn.Column(
+                            ov["add_second_axis"],
+                            ov["align_zero"],
+                            ov["compute_corr"],
+                            width=140,
+                        ),
+                        ov["remove_btn"],
+                    ],
                 )
                 ov_advanced = self._create_advanced_accordion(ov)
                 overlay_rows.append(pn.Column(ov_row, ov_advanced, sizing_mode="stretch_width"))
@@ -312,7 +527,9 @@ class VarSpecEditor(param.Parameterized):
         for name in (names or [])[:3]:
             self.add_subplot(name)
 
-    def update_available_variables(self, names: list[str]) -> None:
+    def update_available_variables(
+        self, names: list[str], facet_schema: object | None = _UNSET
+    ) -> None:
         """Update the available variables without resetting the subplots.
 
         Keeps all current subplots and selections; existing variables that
@@ -321,13 +538,19 @@ class VarSpecEditor(param.Parameterized):
 
         Args:
             names: New list of available variable names
+            facet_schema: Optional fresh facet schema for the new split
+                (pass ``None`` to disable the chains); when given, the
+                per-variable facet chains are rebuilt from it.
         """
+        if facet_schema is not _UNSET:
+            self.facet_schema = facet_schema
         self.available_variables = list(names)
         for sp in self._subplots:
             for widgets in [sp["primary"], *sp["overlays"]]:
                 if widgets["name"].value not in names:
                     widgets["name"].value = None
                 widgets["name"].options = list(names)
+                self._rebuild_chain_widgets(widgets)
 
     def add_subplot(self, primary_name: str | None = None) -> int:
         """Add a new subplot with a primary variable."""
@@ -345,6 +568,23 @@ class VarSpecEditor(param.Parameterized):
         self._refresh_layout()
         self._on_widget_change()
         return subplot_id
+
+    def add_subplots(self, names: list[str]) -> None:
+        """Add one subplot per name, skipping names already plotted.
+
+        Used by the group browser's ``Add all`` buttons: every ``name``
+        becomes its own timeseries panel; names that are already used as a
+        primary or overlay variable anywhere are skipped.
+
+        Args:
+            names: Variable names to add as subplots.
+        """
+        used = self._get_used_variables()
+        for name in names:
+            if not name or name in used:
+                continue
+            self.add_subplot(name)
+            used.add(name)
 
     def remove_subplot(self, subplot_id: int) -> None:
         """Remove a subplot by its stable ID."""
@@ -517,6 +757,9 @@ class VarSpecEditor(param.Parameterized):
             widgets["add_second_axis"].value = spec.get("add_second_axis", False)
             widgets["align_zero"].value = spec.get("align_zero", False)
             widgets["compute_corr"].value = spec.get("compute_corr", False)
+
+        if widgets.get("chain"):
+            self._sync_chain_from_name(widgets)
 
     def from_var_specs(self, specs: list[dict]) -> None:
         """Rebuild the editor's subplots from a list of var_specs.

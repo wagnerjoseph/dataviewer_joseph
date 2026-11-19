@@ -37,6 +37,7 @@ from .data import (
     load_timeseries_for_location,
     load_variable_data,
 )
+from .facets import FacetSchema
 from .plotting import (
     add_dynamic_sizing,
     create_map_data_table,
@@ -568,6 +569,16 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         step=1,
         width=120,
     )
+
+    # =============================================================================
+    # VARIABLE FACETS (optional grouping, only when facet_vocab is configured)
+    # =============================================================================
+
+    facet_vocab = config.facet_vocab
+
+    map_facet_row = pn.Row(sizing_mode="stretch_width", visible=False)
+    map_facet_selects: dict[str, pn.widgets.Select] = {}
+    state["map_facet_schema"] = None
 
     gradient_select = pn.widgets.Select(
         label="Gradient",
@@ -1161,9 +1172,63 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         # (_valid_timeseries_specs) instead of being dropped here.
         editor = state.get("var_spec_editor")
         if editor is not None:
-            editor.update_available_variables(
-                get_timeseries_variables(config, split_dir)
+            ts_names = get_timeseries_variables(config, split_dir)
+            ts_schema = FacetSchema(ts_names, facet_vocab) if facet_vocab else None
+            editor.update_available_variables(ts_names, facet_schema=ts_schema)
+
+        # Rebuild the facet filters for the new split's variable names.
+        rebuild_map_facets(split_dir)
+
+    # =============================================================================
+    # FACET FILTER ROW (map)
+    # =============================================================================
+
+    def apply_map_facet_filters():
+        """Refilter the map variable list from the facet dropdowns."""
+        schema = state.get("map_facet_schema")
+        if schema is None or not map_facet_row.visible:
+            return
+        selection = {
+            facet: widget.value
+            for facet, widget in map_facet_selects.items()
+            if widget.value != "All"
+        }
+        filtered = schema.filter_names(selection)
+        variable_select.options = filtered
+        current = variable_select.value
+        if not filtered:
+            variable_select.value = None
+        elif current not in filtered:
+            variable_select.value = filtered[0]
+
+    def rebuild_map_facets(split_dir: str | None):
+        """(Re)build the facet filter row for a split (map variables)."""
+        names = get_variable_names(config, split_dir) if split_dir else []
+        schema = FacetSchema(names, facet_vocab) if facet_vocab else None
+        state["map_facet_schema"] = schema
+        map_facet_selects.clear()
+        if schema is None or not schema.active():
+            map_facet_row.visible = False
+            map_facet_row.objects = []
+            # Restore the unfiltered list (a previous faceted split may have
+            # narrowed it).
+            variable_select.options = names
+            return
+        widgets = []
+        for facet in schema.active_facets():
+            values = schema.facet_values(facet)
+            widget = pn.widgets.Select(
+                label=facet.title(),
+                options=["All"] + values,
+                value="All",
+                width=150,
             )
+            widget.param.watch(lambda event: apply_map_facet_filters(), "value")
+            map_facet_selects[facet] = widget
+            widgets.append(widget)
+        map_facet_row.objects = widgets
+        map_facet_row.visible = True
+        apply_map_facet_filters()
 
     def on_variable_change(event):
         """Handle variable selection change."""
@@ -1247,10 +1312,13 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
         if split_select.value
         else []
     )
+    ts_facet_schema = FacetSchema(ts_variables, facet_vocab) if facet_vocab else None
 
     # Create editor with callback to regenerate plot on config change
     var_spec_editor = VarSpecEditor(
-        available_variables=ts_variables, on_config_change=regenerate_timeseries
+        available_variables=ts_variables,
+        on_config_change=regenerate_timeseries,
+        facet_schema=ts_facet_schema,
     )
     # Add default subplots (one per variable, creating 3 panels by default)
     for var in ts_variables[:3]:
@@ -1343,6 +1411,8 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
     # =============================================================================
     # INITIALIZATION
     # =============================================================================
+
+    rebuild_map_facets(split_select.value)
 
     if split_select.value and variable_select.value:
         render_map(split_select.value, variable_select.value)
@@ -1444,6 +1514,7 @@ def create_app(config: DataConfig, var_specs: list[dict] | None = None) -> pn.Co
             "# Dataviewer",
             sizing_mode="stretch_width",
         ),
+        map_facet_row,
         controls_row,
         info_pane,
         main_layout,

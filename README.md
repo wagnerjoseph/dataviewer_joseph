@@ -11,6 +11,10 @@ Interactive geospatial timeseries data viewer. It plots your Earth-observation d
 - **Additional Data Viewer**: Per-location attributes with auto-selected rendering
 - **Auto-Discovery**: Automatically finds splits, variables, and locations from your data
 - **Data Preparation Tool**: Convert raw data into the expected format easily
+- **Variable Groups (optional)**: When a `facet_vocab` is configured, the map
+  variable picker gains independent filter dropdowns (e.g. group, timescale,
+  model) and the timeseries config offers per-variable facet selectors,
+  making large flat variable lists easy to navigate
 
 ## Installation
 
@@ -221,6 +225,70 @@ data_root/
     └── ...
 ```
 
+### Variable groups (optional)
+
+Dense datasets often store many variables flat in one split (e.g.
+`lai_deviation_year`, `swvl1_deviation_month`, `rho_bias_lai_year`,
+`prediction_linear`). The viewer can group them when you describe how names are
+structured — **only when you configure it**, otherwise nothing changes.
+
+Set `facet_vocab` on `DataConfig` (each facet maps to the token values that
+identify it in column names; names are split on `_`, values come from the data):
+
+```python
+from dataviewer_joseph import create_app, DataConfig
+
+app = create_app(DataConfig(
+    root="/path/to/my/data/dataviewer_auto",
+    facet_vocab={
+        "group": ["lai", "swvl1"],   # first token group
+        "scale": ["year", "month"],  # timescale token
+        "model": ["linear", "tree", "ridge"],  # model token
+    },
+))
+app.show()
+```
+
+When vocabulary tokens appear in the variable names:
+
+- **Map picker**: independent filter dropdowns (one per detected facet, plus an
+  auto-derived "metric" facet for any leftover token) narrow the Variable list.
+  They are interchangeable — pick any combination in any order, no hierarchy.
+  If the filters fully determine one variable it is selected automatically.
+- **Timeseries config** (the floating Config panel): inside each timeseries
+  variable row the single flat dropdown is replaced by one small selector per
+  facet (group, scale, model, metric — in the order of `facet_vocab`, plus an
+  "Other" picker for columns outside the scheme, e.g. `backscatter40`). Every
+  selector has "All"; the row's variable applies automatically as soon as the
+  combination leaves exactly one column ("n variables match — pick more" /
+  "No variable matches" notes guide you). Saved var configs populate the
+  selectors from the stored variable names, so nothing is lost on import.
+
+Without `facet_vocab` (or when no name matches it) the app shows the plain flat
+lists exactly as before.
+
+To try it with example data, generate faceted dummy data (same snippet,
+nothing else to configure — the vocabulary comes with it):
+
+```python
+from dataviewer_joseph import create_app, generate_dummy_data
+
+config = generate_dummy_data("/tmp/dataviewer_faceted", n_locations=200, n_tiles=2, faceted=True)
+create_app(config).show()
+```
+
+or from bash:
+
+```bash
+uv run python scripts/generate_dummy_data.py --output /tmp/dataviewer_faceted --faceted
+uv run python scripts/run_app.py --data /tmp/dataviewer_faceted --show
+```
+
+`faceted=True` (and the CLI `--faceted` flag) write the vocabulary into a
+`dataviewer_meta.json` next to the data, so plain `DataConfig(root)` — including
+the `run_app.py` command — enables the grouping automatically.
+(`examples/03_faceted_variables.py` is the same in script form.)
+
 ### Reusing a timeseries var config
 
 The exact timeseries plotting (variables, colors, overlays, thresholds) is driven
@@ -255,6 +323,7 @@ See the `examples/` directory for complete example scripts:
 - `examples/01_basic_app.py` — create and display the app
 - `examples/02_var_specs_editor.py` — configure var_specs interactively and plot them
 - `examples/02_api_usage.py` — load data and create plots programmatically
+- `examples/03_faceted_variables.py` — grouped variable demo (facets)
 
 ---
 

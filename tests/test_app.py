@@ -317,6 +317,153 @@ class TestMapInteraction:
         assert tuple(ax.get_ylim()) == pytest.approx((47.0, 51.0), abs=0.1)
 
 
+# =============================================================================
+# VARIABLE FACETS (optional grouping via DataConfig.facet_vocab)
+# =============================================================================
+
+FACET_VOCAB = {
+    "group": ["lai", "swvl1"],
+    "scale": ["year", "month"],
+    "model": ["linear", "tree", "ridge"],
+}
+
+FACETED_VARIABLES = [
+    "lai_deviation_year",
+    "lai_deviation_month",
+    "swvl1_deviation_year",
+    "swvl1_deviation_month",
+    "prediction_linear",
+    "prediction_tree",
+    "bias_ridge",
+]
+
+
+@pytest.fixture
+def faceted_config(tmp_path):
+    """DataConfig with faceted variable names + vocabulary."""
+    import shutil
+
+    from dataviewer_joseph.data import generate_dummy_data
+
+    generate_dummy_data(
+        tmp_path,
+        n_locations=25,
+        n_tiles=1,
+        variables=FACETED_VARIABLES,
+        seed=42,
+    )
+    yield DataConfig(root=tmp_path, facet_vocab=FACET_VOCAB)
+    shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+class TestVariableFacets:
+    """Facet filter row (map) and timeseries editor chain selectors."""
+
+    def test_facets_only_when_configured(self, data_config, faceted_config):
+        """No facet UI without facet_vocab; app stays flat."""
+        from dataviewer_joseph.app import create_app as _create_app
+
+        app_flat = _create_app(data_config)
+        with pytest.raises(AssertionError):
+            _find(app_flat, pn.widgets.Select, label="Group")
+
+        app = _create_app(faceted_config)
+        group = _find(app, pn.widgets.Select, label="Group")
+        assert group.value == "All"
+        assert group.options == ["All", "lai", "swvl1"]
+
+    def test_map_facet_filters_narrow_variable_list(self, faceted_config):
+        """Combining facet dropdowns filters the map variable picker."""
+        from dataviewer_joseph.app import create_app as _create_app
+
+        app = _create_app(faceted_config)
+        group = _find(app, pn.widgets.Select, label="Group")
+        scale = _find(app, pn.widgets.Select, label="Scale")
+        model = _find(app, pn.widgets.Select, label="Model")
+        variable = _find(app, pn.widgets.Select, label="Variable")
+
+        group.value = "lai"
+        assert set(variable.options) == {
+            "lai_deviation_month",
+            "lai_deviation_year",
+        }
+        scale.value = "year"
+        assert variable.options == ["lai_deviation_year"]
+        # Fully determined: the single match is auto-selected.
+        assert variable.value == "lai_deviation_year"
+
+        # Levels are interchangeable: model-only filtering works on its own.
+        model.value = "tree"
+        group.value = None
+        scale.value = None
+        assert variable.options == ["prediction_tree"]
+        assert variable.value == "prediction_tree"
+
+    def test_ts_editor_chain_selectors(self, faceted_config):
+        """The timeseries editor still offers per-variable facet chains."""
+        from dataviewer_joseph.app import create_app as _create_app
+
+        app = _create_app(faceted_config)
+        state = app._dv_state
+        editor = state["var_spec_editor"]
+        # The editor gets the ts facet schema: per-variable selectors active.
+        assert editor.facet_schema is not None
+        assert editor._subplots and editor._subplots[0]["primary"].get("chain")
+
+        # No "Browse by groups" browser rendered anywhere in the app.
+        assert not [
+            b
+            for b in _walk_collect(app, pn.widgets.Button)
+            if b.label.startswith("Add all (")
+        ], "the timeseries group browser should be gone"
+
+
+def test_var_spec_editor_picker_rows_fit(faceted_config):
+    """Facet chain rows must not overlap color pickers/labels.
+
+    Variables with facet chains get a two-line row: the chain on the first
+    line, color + label on the second, so the dropdowns can never overlap
+    the color picker regardless of panel width.
+    """
+    from dataviewer_joseph.app import create_app as _create_app
+
+    app = _create_app(faceted_config)
+    state = app._dv_state
+    editor = state["var_spec_editor"]
+    assert editor.facet_schema is not None
+
+    for sp in editor._subplots:
+        for widgets in [sp["primary"], *sp["overlays"]]:
+            if not widgets.get("chain"):
+                continue
+            selector = editor._variable_selector_column(widgets)
+            # One select per facet, sized to fit without overflowing.
+            n = len(widgets["chain"])
+            assert selector.width == pytest.approx(n * 124 + 6)
+            select_widths = [sel.width for sel in widgets["chain"].values()]
+            assert max(select_widths) * n + 8 <= selector.width
+
+            # With a chain the picker is a two-line Column (chain line on
+            # top, color+label line below).
+            row = editor._picker_row(widgets)
+            assert isinstance(row, pn.Column), "chain pickers must be two-line"
+            assert len(row.objects) == 2
+
+
+def _walk_collect(obj, cls):
+    """Collect all widgets of a class below a Panel component."""
+    out = []
+
+    def rec(o):
+        for child in getattr(o, "objects", None) or []:
+            out.append(child)
+            if hasattr(child, "objects"):
+                rec(child)
+
+    rec(obj)
+    return [w for w in out if isinstance(w, cls)]
+
+
 def _red_marker_pixels(fileobj: io.BytesIO) -> int:
     """Count pure-red marker pixels in a downloaded map PNG."""
     from PIL import Image

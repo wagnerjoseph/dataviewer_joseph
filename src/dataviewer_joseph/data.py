@@ -296,6 +296,56 @@ def get_timeseries_variables(config: DataConfig, split: str) -> list[str]:
     return sorted([c for c in columns if c not in exclude])
 
 
+# Example facet names used by ``generate_dummy_data(faceted=True)`` —
+# a small dataset exercising the optional variable grouping (DataConfig.facet_vocab).
+FACET_VOCAB_EXAMPLE = {
+    "group": ["lai", "swvl1"],
+    "scale": ["year", "month"],
+    "model": ["linear", "tree", "ridge"],
+}
+FACETED_METRIC_VARIABLES = [
+    "lai_deviation_year",
+    "lai_deviation_month",
+    "swvl1_deviation_year",
+    "swvl1_deviation_month",
+    "rho_bias_lai_year",
+    "rho_bias_swvl1_month",
+    "prediction_linear",
+    "prediction_tree",
+    "bias_ridge",
+]
+FACETED_TS_COLUMNS = [
+    "lai_deviation",
+    "swvl1_deviation",
+    "rho_bias_lai_year",
+    "rho_bias_swvl1_month",
+    "prediction_linear",
+    "prediction_tree",
+    "bias_linear",
+    "bias_ridge",
+    "backscatter40",
+]
+
+
+def _write_facet_meta(root: Path) -> None:
+    """Persist the example facet vocabulary next to the lookup table.
+
+    ``DataConfig`` reads ``dataviewer_meta.json`` on init, so the viewer's
+    variable-grouping UI activates for this data folder without passing
+    ``facet_vocab`` in code (the CLI flow relies on this).
+    """
+    import json
+
+    meta_path = root / "dataviewer_meta.json"
+    try:
+        meta_path.write_text(
+            json.dumps({"facet_vocab": FACET_VOCAB_EXAMPLE}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"Could not write facet meta {meta_path}: {e}")
+
+
 def generate_dummy_data(
     root: Path | str,
     n_locations: int = 100,
@@ -304,6 +354,7 @@ def generate_dummy_data(
     variables: list[str] | None = None,
     additional_variables: list[str] | None = None,
     seed: int = 42,
+    faceted: bool = False,
 ) -> DataConfig:
     """Generate dummy data for testing and development.
 
@@ -311,7 +362,7 @@ def generate_dummy_data(
     - lookup.parquet with location_id, lat, lon, tile_id
     - <split>/metrics_global_plot/<variable>.parquet
     - <split>/additional_data/<tile>.parquet with per-location attributes
-    - <split>/timeseries/<tile>.parquet with time, location_id, backscatter40, lai, swvl1, predictions
+    - <split>/timeseries/<tile>.parquet with time, location_id and variables
 
     Args:
         root: Root directory for the data
@@ -322,6 +373,11 @@ def generate_dummy_data(
         additional_variables: Attribute columns for additional_data
             (default: ["elevation", "slope", "aspect", "green_cover"])
         seed: Random seed for reproducibility
+        faceted: If True, generates variable names following the example
+            facet vocabulary (group/scale/model tokens, e.g.
+            ``lai_deviation_year``, ``prediction_linear``) and returns a
+            ``DataConfig`` with ``facet_vocab`` set, so the viewer's optional
+            variable-grouping UI is active.
 
     Returns:
         DataConfig for the generated data
@@ -335,7 +391,7 @@ def generate_dummy_data(
         splits = ["split_2020_2022", "split_2023_2024"]
 
     if variables is None:
-        variables = ["rmse", "mae", "pearson"]
+        variables = FACETED_METRIC_VARIABLES if faceted else ["rmse", "mae", "pearson"]
 
     if additional_variables is None:
         additional_variables = ["elevation", "slope", "aspect", "green_cover"]
@@ -404,6 +460,15 @@ def generate_dummy_data(
         for tile_id in tile_ids:
             tile_locations = location_ids[location_tile_ids == tile_id]
 
+            ts_columns = FACETED_TS_COLUMNS if faceted else [
+                "backscatter40",
+                "lai",
+                "swvl1",
+                "baseline",
+                "rf_depth5_n300_without_lagged_Core_Only_feat5",
+                "rf_depth20_n300_with_lagged_Core_Short_Lags_feat17",
+            ]
+
             rows = []
             for loc_id in tile_locations:
                 for date in date_range:
@@ -412,14 +477,10 @@ def generate_dummy_data(
                     row = {
                         "location_id": loc_id,
                         "time": date,
-                        "backscatter40": seasonal + rng.normal(0, 0.5),
-                        "lai": 2 + seasonal + rng.normal(0, 0.3),
-                        "swvl1": 0.3 + seasonal * 0.1 + rng.normal(0, 0.05),
-                        "baseline": seasonal + rng.normal(0, 0.4),
-                        "rf_depth5_n300_without_lagged_Core_Only_feat5": seasonal
-                        + rng.normal(0, 0.3),
-                        "rf_depth20_n300_with_lagged_Core_Short_Lags_feat17": seasonal
-                        + rng.normal(0, 0.25),
+                        **{
+                            col: seasonal + rng.normal(0, 0.25)
+                            for col in ts_columns
+                        },
                     }
                     rows.append(row)
 
@@ -428,7 +489,11 @@ def generate_dummy_data(
 
         logger.info(f"Generated data for split '{split}'")
 
-    return DataConfig(root=root)
+    config = DataConfig(root=root)
+    if faceted:
+        _write_facet_meta(root)
+        config = DataConfig(root=root, facet_vocab=FACET_VOCAB_EXAMPLE)
+    return config
 
 
 class DataIndex:

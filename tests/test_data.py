@@ -5,6 +5,9 @@ import pandas as pd
 from dataviewer_joseph.config import DataConfig
 from dataviewer_joseph.data import (
     DataIndex,
+    FACET_VOCAB_EXAMPLE,
+    FACETED_METRIC_VARIABLES,
+    FACETED_TS_COLUMNS,
     find_splits,
     generate_dummy_data,
     get_timeseries_variables,
@@ -15,6 +18,56 @@ from dataviewer_joseph.data import (
     load_timeseries_for_location,
     load_variable_data,
 )
+
+
+class TestFacetedDummyData:
+    """Faceted dummy data activates the grouped-variable example."""
+
+    def test_faceted_names_and_vocab(self, tmp_path):
+        config = generate_dummy_data(tmp_path, n_locations=20, n_tiles=1, faceted=True)
+        assert config.facet_vocab == FACET_VOCAB_EXAMPLE
+
+        split = find_splits(config)[0]
+        assert set(get_variable_names(config, split)) == set(FACETED_METRIC_VARIABLES)
+        assert set(get_timeseries_variables(config, split)) == set(FACETED_TS_COLUMNS)
+
+    def test_meta_file_activates_vocab(self, tmp_path):
+        """A plain DataConfig(root) adopts the stored facet_vocab (CLI flow)."""
+        generate_dummy_data(tmp_path, n_locations=20, n_tiles=1, faceted=True)
+        config = DataConfig(root=tmp_path)
+        assert config.facet_vocab == FACET_VOCAB_EXAMPLE
+
+    def test_explicit_vocab_wins_over_meta(self, tmp_path):
+        generate_dummy_data(tmp_path, n_locations=20, n_tiles=1, faceted=True)
+        custom = {"group": ["x", "y"]}
+        config = DataConfig(root=tmp_path, facet_vocab=custom)
+        assert config.facet_vocab == custom
+
+    def test_no_meta_without_faceted(self, tmp_path):
+        generate_dummy_data(tmp_path, n_locations=20, n_tiles=1)
+        config = DataConfig(root=tmp_path)
+        assert config.facet_vocab is None
+
+    def test_non_faceted_unchanged(self, tmp_path):
+        config = generate_dummy_data(tmp_path, n_locations=20, n_tiles=1)
+        assert config.facet_vocab is None
+        split = find_splits(config)[0]
+        assert get_variable_names(config, split) == ["mae", "pearson", "rmse"]
+
+
+class TestFacetGroupsExample:
+    """Faceted variables follow the example naming so grouping activates."""
+
+    def test_facet_schema_active(self, tmp_path):
+        from dataviewer_joseph.facets import FacetSchema
+
+        config = generate_dummy_data(tmp_path, n_locations=20, n_tiles=1, faceted=True)
+        split = find_splits(config)[0]
+        schema = FacetSchema(get_variable_names(config, split), config.facet_vocab)
+        assert schema.active()
+        assert schema.facet_values("group") == ["lai", "swvl1"]
+        assert schema.facet_values("scale") == ["month", "year"]
+        assert schema.facet_values("model") == ["linear", "ridge", "tree"]
 
 
 class TestFindSplits:
